@@ -49,12 +49,29 @@ def move_box_limit(scf):
             mc.start_linear_motion(body_x_cmd, body_y_cmd, body_z_cmd)
 
             time.sleep(0.3)
-            
-            body_z_cmd = -0.1
-            
+
+            body_x_cmd = 0.1
             mc.start_linear_motion(body_x_cmd, body_y_cmd, body_z_cmd)
-            
+
             time.sleep(0.3)
+
+            body_x_cmd = -0.1
+            mc.start_linear_motion(body_x_cmd, body_y_cmd, body_z_cmd)
+            time.sleep(0.3)
+
+            mc.stop()
+            time.sleep(0.3)
+
+            circleRadius = 0.2
+            mc.start_circle_left(circleRadius, max_vel)
+            time.sleep(10)
+
+            mc.stop()
+            time.sleep(0.3)
+
+            mc.down(0.5, max_vel)
+            time.sleep(0.3)
+
 
 def move_linear_simple(scf):
     ...
