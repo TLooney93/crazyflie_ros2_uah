@@ -1,0 +1,87 @@
+<?xml version="1.0"?>
+<sdf version="1.10">
+  <!--
+    This is a visual placeholder, not a flight-dynamics model. It is static so
+    the first Gazebo launch is deterministic while the controller is developed.
+  -->
+  <model name="crazyflie">
+    <static>true</static>
+
+    <link name="body">
+      <visual name="center_deck">
+        <geometry>
+          <box>
+            <size>0.075 0.055 0.012</size>
+          </box>
+        </geometry>
+        <material>
+          <ambient>0.08 0.08 0.08 1</ambient>
+          <diffuse>0.12 0.12 0.12 1</diffuse>
+        </material>
+      </visual>
+
+      <visual name="front_left_arm">
+        <pose>0.046 0.046 0 0 0 0.785398</pose>
+        <geometry><box><size>0.080 0.008 0.006</size></box></geometry>
+        <material><diffuse>0.12 0.12 0.12 1</diffuse></material>
+      </visual>
+      <visual name="front_right_arm">
+        <pose>0.046 -0.046 0 0 0 -0.785398</pose>
+        <geometry><box><size>0.080 0.008 0.006</size></box></geometry>
+        <material><diffuse>0.12 0.12 0.12 1</diffuse></material>
+      </visual>
+      <visual name="rear_left_arm">
+        <pose>-0.046 0.046 0 0 0 -0.785398</pose>
+        <geometry><box><size>0.080 0.008 0.006</size></box></geometry>
+        <material><diffuse>0.12 0.12 0.12 1</diffuse></material>
+      </visual>
+      <visual name="rear_right_arm">
+        <pose>-0.046 -0.046 0 0 0 0.785398</pose>
+        <geometry><box><size>0.080 0.008 0.006</size></box></geometry>
+        <material><diffuse>0.12 0.12 0.12 1</diffuse></material>
+      </visual>
+
+      <visual name="front_left_motor">
+        <pose>0.072 0.072 0.005 0 0 0</pose>
+        <geometry><cylinder><radius>0.009</radius><length>0.015</length></cylinder></geometry>
+        <material><diffuse>0.25 0.25 0.25 1</diffuse></material>
+      </visual>
+      <visual name="front_right_motor">
+        <pose>0.072 -0.072 0.005 0 0 0</pose>
+        <geometry><cylinder><radius>0.009</radius><length>0.015</length></cylinder></geometry>
+        <material><diffuse>0.25 0.25 0.25 1</diffuse></material>
+      </visual>
+      <visual name="rear_left_motor">
+        <pose>-0.072 0.072 0.005 0 0 0</pose>
+        <geometry><cylinder><radius>0.009</radius><length>0.015</length></cylinder></geometry>
+        <material><diffuse>0.25 0.25 0.25 1</diffuse></material>
+      </visual>
+      <visual name="rear_right_motor">
+        <pose>-0.072 -0.072 0.005 0 0 0</pose>
+        <geometry><cylinder><radius>0.009</radius><length>0.015</length></cylinder></geometry>
+        <material><diffuse>0.25 0.25 0.25 1</diffuse></material>
+      </visual>
+
+      <visual name="front_left_propeller">
+        <pose>0.072 0.072 0.015 0 0 0</pose>
+        <geometry><cylinder><radius>0.032</radius><length>0.001</length></cylinder></geometry>
+        <material><diffuse>1 0.45 0 0.75</diffuse></material>
+      </visual>
+      <visual name="front_right_propeller">
+        <pose>0.072 -0.072 0.015 0 0 0</pose>
+        <geometry><cylinder><radius>0.032</radius><length>0.001</length></cylinder></geometry>
+        <material><diffuse>1 0.45 0 0.75</diffuse></material>
+      </visual>
+      <visual name="rear_left_propeller">
+        <pose>-0.072 0.072 0.015 0 0 0</pose>
+        <geometry><cylinder><radius>0.032</radius><length>0.001</length></cylinder></geometry>
+        <material><diffuse>0.12 0.12 0.12 0.75</diffuse></material>
+      </visual>
+      <visual name="rear_right_propeller">
+        <pose>-0.072 -0.072 0.015 0 0 0</pose>
+        <geometry><cylinder><radius>0.032</radius><length>0.001</length></cylinder></geometry>
+        <material><diffuse>0.12 0.12 0.12 0.75</diffuse></material>
+      </visual>
+    </link>
+  </model>
+</sdf>

@@ -34,7 +34,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import yaml
 
-config_file = 'sample_lh_1.yaml'
+config_file = 'lhsample_3.yaml'
 
 Range = 5  # Range of each base station in meters
 FoV_h = 150  # Horizontal Field of View in degrees
