@@ -1,7 +1,8 @@
 import threading
+from queue import Queue, Empty
 
 from cflib.crazyflie.log import LogConfig
-from cflib.crazyflie.syncLogger import SyncLogger
+
 
 
 class TelemetryReader:
@@ -10,11 +11,15 @@ class TelemetryReader:
         self.scf = scf
         self.callback = callback
         self.period_ms = period_ms
+        self._samples = Queue()
 
         self.running = False
         self.thread = None
 
     def start(self):
+        if self.thread is not None and self.thread.is_alive():
+            return
+
         self.running = True
 
         self.thread = threading.Thread(
@@ -25,7 +30,28 @@ class TelemetryReader:
         self.thread.start()
 
     def stop(self):
+        """Request shutdown and wait up to one second when called externally.
+
+        Calls from the reader thread only request shutdown to avoid joining
+        the current thread. Raise TimeoutError if an external wait expires
+        while the reader is still alive.
+        """
         self.running = False
+
+        if self.thread is None:
+            return
+
+        if self.thread is threading.current_thread():
+            return
+
+        self.thread.join(timeout=1.0)
+
+        if self.thread.is_alive():
+            raise TimeoutError("Telemetry reader did not stop within 1 second")
+
+    def _on_log_data(self, timestamp, data, logconf):
+        if self.running:
+            self._samples.put(data)
 
     def _run(self):
         log_config = LogConfig(
@@ -36,12 +62,27 @@ class TelemetryReader:
         log_config.add_variable('stateEstimate.x', 'float')
         log_config.add_variable('stateEstimate.y', 'float')
         log_config.add_variable('stateEstimate.z', 'float')
+        self.scf.cf.log.add_config(log_config)
+        log_config.data_received_cb.add_callback(self._on_log_data)
 
-        with SyncLogger(self.scf, log_config) as logger:
+        try:
+            log_config.start()
 
-            for timestamp, data, logconf in logger:
+            while self.running:
+                try:
+                    data = self._samples.get(timeout=0.1)
+                except Empty:
+                    # Check the running flag again when no sample arrives.
+                    continue
 
-                if not self.running:
-                    break
+                if self.running:
+                    self.callback(data)
 
-                self.callback(data)
+        finally:
+            # Clean up when the loop exits or the callback raises an exception.
+            self.running = False
+            log_config.data_received_cb.remove_callback(self._on_log_data)
+            log_config.stop()
+            log_config.delete()
+
+
