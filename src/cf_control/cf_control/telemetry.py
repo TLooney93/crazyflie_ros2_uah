@@ -1,6 +1,5 @@
 import threading
-from queue import Queue, Empty
-
+from queue import Queue, Empty, Full
 from cflib.crazyflie.log import LogConfig
 
 
@@ -11,7 +10,7 @@ class TelemetryReader:
         self.scf = scf
         self.callback = callback
         self.period_ms = period_ms
-        self._samples = Queue()
+        self._samples = Queue(maxsize=1)
 
         self.running = False
         self.thread = None
@@ -50,8 +49,15 @@ class TelemetryReader:
             raise TimeoutError("Telemetry reader did not stop within 1 second")
 
     def _on_log_data(self, timestamp, data, logconf):
-        if self.running:
-            self._samples.put(data)
+        while self.running:
+            try:
+                self._samples.put_nowait(data)
+                return
+            except Full:
+                try:
+                    self._samples.get_nowait()
+                except Empty:
+                    pass
 
     def _run(self):
         log_config = LogConfig(

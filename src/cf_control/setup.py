@@ -44,6 +44,7 @@ setup(
 
     entry_points={
         'console_scripts': [
+          'crazyflie_node = cf_control.crazyflie_node:main',
         ],
     },
 )
