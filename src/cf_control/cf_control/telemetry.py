@@ -1,3 +1,4 @@
+import time
 import threading
 from queue import Queue, Empty, Full
 from cflib.crazyflie.log import LogConfig
@@ -49,9 +50,11 @@ class TelemetryReader:
             raise TimeoutError("Telemetry reader did not stop within 1 second")
 
     def _on_log_data(self, timestamp, data, logconf):
+        sample = (time.monotonic(), data)
+
         while self.running:
             try:
-                self._samples.put_nowait(data)
+                self._samples.put_nowait(sample)
                 return
             except Full:
                 try:
@@ -76,13 +79,13 @@ class TelemetryReader:
 
             while self.running:
                 try:
-                    data = self._samples.get(timeout=0.1)
+                    received_at, data = self._samples.get(timeout=0.1)
                 except Empty:
                     # Check the running flag again when no sample arrives.
                     continue
 
                 if self.running:
-                    self.callback(data)
+                    self.callback(data, received_at)
 
         finally:
             # Clean up when the loop exits or the callback raises an exception.

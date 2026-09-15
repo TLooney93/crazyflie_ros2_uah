@@ -36,3 +36,4 @@ POSITION_KP = 0.5
 #*************  TELEMETRY  ***************
 # sets the requested interval between position measurements
 TELEMETRY_PERIOD_MS = 100
+POSITION_TIMEOUT_S = 0.5
