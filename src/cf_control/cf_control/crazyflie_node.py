@@ -11,6 +11,8 @@ from rclpy.node import Node
 from cf_control.lighthouse import LighthouseManager
 from cf_control.flight_controller import FlightController
 from geometry_msgs.msg import (Point, Twist)
+from cf_control.flight_state import FlightState
+from std_srvs.srv import Trigger
 from cf_control.config import (
     DRONES,
     CACHE_DIR,
@@ -50,6 +52,7 @@ class CrazyflieNode(Node):
                     max_velocity=MAX_VELOCITY
                 )
 
+        self.flight_state = FlightState.DISARMED
 
         self.position_pub = self.create_publisher(
             Point,
@@ -82,6 +85,12 @@ class CrazyflieNode(Node):
 
         )
 
+        self.clear_target_service = self.create_service(
+            Trigger,
+            f'/{self.drone_id}/clear_target',
+            self.clear_target_callback,
+        )
+
     def target_callback(self, msg):
         target = (msg.x, msg.y, msg.z)
 
@@ -100,6 +109,19 @@ class CrazyflieNode(Node):
         self.get_logger().info(
             f'Target stored: {msg.x}, {msg.y}, {msg.z}'
         )
+
+    def clear_target_callback(self, request, response):
+        """Clear the target used by the dry-run controller."""
+        self.flight_controller.clear_target()
+
+        self.get_logger().info('Target cleared')
+
+        response.success = True
+        response.message = (
+            'Target cleared; diagnostic velocity will be zero '
+            'on the next control tick.'
+        )
+        return response
 
     def connect(self):
         self.get_logger().info(
