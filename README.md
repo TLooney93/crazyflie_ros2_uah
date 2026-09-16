@@ -1,6 +1,6 @@
 Undergrad Senior Design Project - CrazyConductors
 University of Alabama Huntsville EE dept Fall 2026
-Drone swarm software architecture using Crazyflie platform
+Drone swarm software architecture using Crazyflie platform and LightHouse Positioning System
 
 OBJECTIVE:
 Autonomous drone swarm commanded by wand gesture
