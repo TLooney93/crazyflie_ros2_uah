@@ -37,3 +37,27 @@ POSITION_KP = 0.5
 # sets the requested interval between position measurements
 TELEMETRY_PERIOD_MS = 100
 POSITION_TIMEOUT_S = 0.5
+
+
+#*************  WAND INPUT  ***************
+
+# Topic used to publish recognized wand gestures. Wand commands are kept
+# separate from flight commands until their behavior and safety are verified.
+WAND_GESTURE_TOPIC = '/wand/gesture'
+WAND_POSE_TOPIC = '/wand/pose'
+WAND_ENABLED_TOPIC = '/wand/enabled'
+WAND_CONNECTED_TOPIC = '/wand/connected'
+WAND_FRAME_ID = 'world'
+WAND_SIMULATION_STEP_M = 0.1
+
+VALID_WAND_GESTURES = {
+    'enable',
+    'disable',
+    'takeoff',
+    'land',
+    'move_left',
+    'move_right',
+    'move_forward',
+    'move_backward',
+    'hold',
+}
