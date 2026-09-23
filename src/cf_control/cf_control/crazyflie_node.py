@@ -10,6 +10,7 @@ from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
 from rclpy.node import Node
 from cf_control.lighthouse import LighthouseManager
 from cf_control.flight_controller import FlightController
+from cf_control.crazyflie_interface import CrazyflieInterface
 from geometry_msgs.msg import (Point, Twist)
 from cf_control.flight_state import FlightState
 from std_srvs.srv import Trigger
@@ -20,7 +21,8 @@ from cf_control.config import (
     POSITION_KP,
     MAX_VELOCITY,
     CONTROL_RATE_HZ,
-    POSITION_TIMEOUT_S
+    POSITION_TIMEOUT_S,
+    DEFAULT_HEIGHT,
 )
 
 class CrazyflieNode(Node):
@@ -41,8 +43,30 @@ class CrazyflieNode(Node):
             cf=Crazyflie(rw_cache=str(CACHE_DIR))
         )
 
+        self.command_interface = CrazyflieInterface(self.scf)
+
+        self.declare_parameter('enable_actuation', False)
+        self.enable_actuation = bool(
+            self.get_parameter('enable_actuation').value
+        )
+
+        self.declare_parameter('takeoff_height', DEFAULT_HEIGHT)
+        self.takeoff_height = float(
+            self.get_parameter('takeoff_height').value
+        )
+
+        self.declare_parameter('takeoff_duration_s', 2.0)
+        self.takeoff_duration_s = float(
+            self.get_parameter('takeoff_duration_s').value
+        )
+
         self.lighthouse = LighthouseManager(self.scf)
 
+        self.declare_parameter('land_duration_s', 2.0)
+        self.land_duration_s = float(
+            self.get_parameter('land_duration_s').value
+        )
+        self.landing_timer = None
         self.current_position = None
         self.position_received_at = None
         self.position_lock = Lock()
@@ -91,6 +115,24 @@ class CrazyflieNode(Node):
             self.clear_target_callback,
         )
 
+        self.takeoff_service = self.create_service(
+            Trigger,
+            f'/{self.drone_id}/takeoff',
+            self.takeoff_callback,
+        )
+
+        self.land_service = self.create_service(
+            Trigger,
+            f'/{self.drone_id}/land',
+            self.land_callback,
+        )
+
+        self.emergency_stop_service = self.create_service(
+            Trigger,
+            f'/{self.drone_id}/emergency_stop',
+            self.emergency_stop_callback,
+        )
+
     def target_callback(self, msg):
         target = (msg.x, msg.y, msg.z)
 
@@ -123,6 +165,97 @@ class CrazyflieNode(Node):
         )
         return response
 
+    def takeoff_callback(self, request, response):
+        """Request a guarded high-level takeoff."""
+        if not self.enable_actuation:
+            response.success = False
+            response.message = 'Actuation is disabled; no takeoff sent.'
+            return response
+
+        if self.flight_state is not FlightState.READY:
+            response.success = False
+            response.message = (
+                f'Takeoff rejected in state {self.flight_state.name}'
+            )
+            return response
+
+        self.command_interface.arm()
+        self.command_interface.takeoff(
+            self.takeoff_height,
+            self.takeoff_duration_s,
+        )
+        self.flight_state = FlightState.FLYING
+
+        response.success = True
+        response.message = (
+            f'Takeoff requested to {self.takeoff_height:.2f} metres.'
+        )
+        return response
+
+    def land_callback(self, request, response):
+        """Request a guarded high-level landing."""
+        if not self.enable_actuation:
+            response.success = False
+            response.message = 'Actuation is disabled; no landing sent.'
+            return response
+
+        if self.flight_state is not FlightState.FLYING:
+            response.success = False
+            response.message = (
+                f'Landing rejected in state {self.flight_state.name}'
+            )
+            return response
+
+        self.command_interface.land(
+            height_m=0.0,
+            duration_s=self.land_duration_s,
+        )
+        self.landing_timer = self.create_timer(
+            self.land_duration_s,
+            self.finish_landing_callback,
+        )
+
+        self.flight_state = FlightState.LANDING
+
+        response.success = True
+        response.message = (
+            f'Landing requested to 0.00 metres over '
+            f'{self.land_duration_s:.2f} seconds.'
+        )
+        return response
+
+    def finish_landing_callback(self):
+        """Stop and disarm after the landing duration."""
+        if self.landing_timer is not None:
+            self.landing_timer.cancel()
+            self.landing_timer = None
+        
+        self.command_interface.stop_high_level()
+        self.command_interface.disarm()
+        self.flight_state = FlightState.DISARMED
+        self.get_logger().info('Landing complete; motors disarmed')
+
+    def emergency_stop_callback(self, request, response):
+        """Immediately stop commands and disarm the drone."""
+        if not self.enable_actuation:
+            response.success = False
+            response.message = 'Actuation is disabled; no emergency stop sent.'
+            return response
+
+        if self.landing_timer is not None:
+            self.landing_timer.cancel()
+            self.landing_timer = None
+
+        self.flight_controller.clear_target()
+        self.command_interface.stop_high_level()
+        self.command_interface.disarm()
+        self.flight_state = FlightState.DISARMED
+
+        self.get_logger().warning('EMERGENCY STOP: Motors disarmed')
+        response.success = True
+        response.message = 'Emergency stop sent; motors disarmed.'
+        return response
+
     def connect(self):
         self.get_logger().info(
             f'Connecting to {self.drone_id}: {self.uri}'
@@ -141,6 +274,7 @@ class CrazyflieNode(Node):
             'Lighthouse input and variance stability checks passed'
         )
         self.telemetry.start()
+        self.flight_state = FlightState.READY
 
     def _on_position(self, data, received_at):
         position = (
@@ -213,3 +347,6 @@ def main(args=None):
                     node.destroy_node()
         finally:
             rclpy.try_shutdown()
+
+if __name__ == '__main__':
+    main()
