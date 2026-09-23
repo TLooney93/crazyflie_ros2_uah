@@ -46,6 +46,7 @@ setup(
         'console_scripts': [
           'crazyflie_node = cf_control.crazyflie_node:main',
           'wand_node = cf_control.wand_node:main',
+          'wand_driver_node = cf_control.wand_driver_node:main',
         ],
     },
 )
