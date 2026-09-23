@@ -14,6 +14,34 @@ class CrazyflieInterface:
         """
         self.scf.cf.param.set_value(name, str(value))
 
+    def arm(self):
+        """Request that the Crazyflie arm its motors."""
+        self.scf.cf.supervisor.send_arming_request(True)
+
+    def disarm(self):
+        """Request that the Crazyflie disarm its motors."""
+        self.scf.cf.supervisor.send_arming_request(False)
+
+    def takeoff(self, height_m, duration_s):
+        """Take off vertically to an absolute height."""
+        self.scf.cf.high_level_commander.takeoff(
+            height_m,
+            duration_s,
+            yaw=None,
+        )
+
+    def land(self, height_m=0.0, duration_s=2.0):
+        """Land vertically at the requested height."""
+        self.scf.cf.high_level_commander.land(
+            height_m,
+            duration_s,
+            yaw=None,
+        )
+
+    def stop_high_level(self):
+        """Stop the high-level trajectory and turn off the motors."""
+        self.scf.cf.high_level_commander.stop()
+
     def send_velocity(self, vx, vy, vz, yaw_rate=0.0):
         """Send one velocity setpoint in the world coordinate frame.
 
