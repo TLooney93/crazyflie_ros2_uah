@@ -1,8 +1,8 @@
-from enum import Enum,auto
+from enum import Enum, auto
+
 
 class FlightState(Enum):
-  DISARMED = auto()
-  READY = auto()
-  FLYING = auto()
-  LANDING = auto()
-
+    DISARMED = auto()
+    READY = auto()
+    FLYING = auto()
+    LANDING = auto()

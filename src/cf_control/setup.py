@@ -27,7 +27,7 @@ setup(
         ),
     ],
 
-    install_requires=['setuptools'],
+    install_requires=['cflib', 'setuptools'],
     zip_safe=True,
 
     maintainer='tanner-looney',

@@ -11,6 +11,8 @@
 
   <depend>ros_gz_sim</depend>
   <depend>ros_gz_bridge</depend>
+  <exec_depend>cf_control</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

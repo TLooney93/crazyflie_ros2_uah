@@ -37,3 +37,16 @@ POSITION_KP = 0.5
 # sets the requested interval between position measurements
 TELEMETRY_PERIOD_MS = 100
 POSITION_TIMEOUT_S = 0.5
+
+
+# ************* FIRST FLIGHT TEST ***************
+
+# The first test is intentionally limited to a vertical takeoff and landing.
+FLIGHT_TEST_HEIGHT_M = 0.30
+ARM_SETTLE_TIME_S = 1.0
+LANDING_HEIGHT_M = 0.05
+LANDING_COMPLETE_TOLERANCE_M = 0.03
+LANDING_SPEED_M_S = 0.10
+MAX_FLIGHT_TIME_S = 10.0
+TELEMETRY_LOSS_DESCENT_S = 3.0
+ENABLE_EXTERNAL_TARGETS = False

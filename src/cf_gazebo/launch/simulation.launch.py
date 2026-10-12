@@ -2,12 +2,16 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
 from launch.actions import IncludeLaunchDescription
 from launch.actions import SetEnvironmentVariable
+from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
+    headless = LaunchConfiguration('headless')
     gazebo_share = get_package_share_directory('ros_gz_sim')
     simulation_share = get_package_share_directory('cf_gazebo')
     world = os.path.join(
@@ -20,7 +24,13 @@ def generate_launch_description():
         value=model_path + os.pathsep + os.environ.get('GZ_SIM_RESOURCE_PATH', ''),
     )
 
-    gazebo = IncludeLaunchDescription(
+    declare_headless = DeclareLaunchArgument(
+        'headless',
+        default_value='false',
+        description='Run only the Gazebo server without the OpenGL GUI',
+    )
+
+    gazebo_gui = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(gazebo_share, 'launch', 'gz_sim.launch.py')
         ),
@@ -28,6 +38,23 @@ def generate_launch_description():
             'gz_args': f'-r -v 4 {world}',
             'on_exit_shutdown': 'true',
         }.items(),
+        condition=UnlessCondition(headless),
     )
 
-    return LaunchDescription([gazebo_resource_path, gazebo])
+    gazebo_headless = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(gazebo_share, 'launch', 'gz_sim.launch.py')
+        ),
+        launch_arguments={
+            'gz_args': f'-s -r -v 4 {world}',
+            'on_exit_shutdown': 'true',
+        }.items(),
+        condition=IfCondition(headless),
+    )
+
+    return LaunchDescription([
+        declare_headless,
+        gazebo_resource_path,
+        gazebo_gui,
+        gazebo_headless,
+    ])
