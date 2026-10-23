@@ -47,6 +47,10 @@ setup(
           'crazyflie_node = cf_control.crazyflie_node:main',
           'wand_node = cf_control.wand_node:main',
           'wand_driver_node = cf_control.wand_driver_node:main',
+          'wand_coordinator = cf_control.wand_coordinator:main',
+          'wand_button_node = cf_control.wand_button_node:main',
+          'wand_gesture_node = cf_control.wand_gesture_node:main',
+          'flight_wand_node = cf_control.flight_wand_node:main',
         ],
     },
 )

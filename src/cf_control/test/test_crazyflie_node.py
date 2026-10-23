@@ -11,6 +11,7 @@ def test_takeoff_is_blocked_when_actuation_is_disabled():
     node = SimpleNamespace(
         enable_actuation=False,
         flight_state=FlightState.READY,
+        position_ready=True,
         command_interface=Mock(),
     )
 
@@ -28,6 +29,7 @@ def test_takeoff_arms_and_commands_drone_when_enabled():
     node = SimpleNamespace(
         enable_actuation=True,
         flight_state=FlightState.READY,
+        position_ready=True,
         command_interface=Mock(),
         takeoff_height=0.4,
         takeoff_duration_s=2.0,
@@ -54,6 +56,7 @@ def test_land_commands_drone_and_changes_state():
         landing_timer=None,
         create_timer=Mock(return_value=timer),
         finish_landing_callback=Mock(),
+        flight_controller=Mock(),
     )
 
     response = CrazyflieNode.land_callback(
@@ -69,6 +72,7 @@ def test_land_commands_drone_and_changes_state():
         height_m=0.0,
         duration_s=2.0,
     )
+    node.command_interface.release_low_level_control.assert_called_once_with()
 
 def test_emergency_stop_cancels_timer_and_disarms():
     timer = Mock()

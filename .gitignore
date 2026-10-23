@@ -2,6 +2,9 @@
 build/
 install/
 log/
+build_jazzy/
+install_jazzy/
+log_jazzy/
 
 # Python
 __pycache__/
@@ -14,3 +17,8 @@ venv/
 # Editors
 .vscode/
 .idea/
+
+# Local vendor downloads and generated reports/artifacts
+crazyflie-firmware/
+tmp/
+output/
