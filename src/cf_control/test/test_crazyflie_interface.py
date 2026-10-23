@@ -39,3 +39,16 @@ def test_land_command():
         2.0,
         yaw=None,
     )
+
+
+def test_velocity_and_release_commands():
+    scf = Mock()
+    interface = CrazyflieInterface(scf)
+
+    interface.send_velocity(0.1, -0.2, 0.3)
+    interface.release_low_level_control()
+
+    scf.cf.commander.send_velocity_world_setpoint.assert_called_once_with(
+        0.1, -0.2, 0.3, 0.0
+    )
+    scf.cf.commander.send_notify_setpoint_stop.assert_called_once_with()

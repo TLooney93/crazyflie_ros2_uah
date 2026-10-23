@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>vicon_datastream_bridge</name>
+  <version>0.1.0</version>
+  <description>Publish Vicon DataStream rigid bodies as ROS 2 poses.</description>
+  <maintainer email="noreply@example.com">UAH Senior Design</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>geometry_msgs</depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>
