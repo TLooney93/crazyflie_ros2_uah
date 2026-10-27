@@ -14,6 +14,14 @@ class CrazyflieInterface:
         """
         self.scf.cf.param.set_value(name, str(value))
 
+    def arm(self):
+        """Request that the Crazyflie arm its motors."""
+        self.scf.cf.supervisor.send_arming_request(True)
+
+    def disarm(self):
+        """Request that the Crazyflie disarm its motors."""
+        self.scf.cf.supervisor.send_arming_request(False)
+
     def send_velocity(self, vx, vy, vz, yaw_rate=0.0):
         """Send one velocity setpoint in the world coordinate frame.
 
@@ -36,3 +44,40 @@ class CrazyflieInterface:
     def stop(self):
         """Send a motor-stop setpoint, which does not perform a landing."""
         self.scf.cf.commander.send_stop_setpoint()
+
+    def stop_and_disarm(self):
+        """Stop setpoint streaming, stop the motors, and request disarming."""
+        self.scf.cf.commander.send_stop_setpoint()
+        self.scf.cf.commander.send_notify_setpoint_stop()
+        self.disarm()
+
+
+class SimulatedCrazyflieInterface:
+    """A command interface that forwards velocity to a ROS publisher callback."""
+
+    def __init__(self, velocity_callback):
+        """Store the callback used to publish simulated velocity commands."""
+        self.velocity_callback = velocity_callback
+        self.armed = False
+
+    def arm(self):
+        """Mark the simulated vehicle as armed."""
+        self.armed = True
+
+    def disarm(self):
+        """Mark the simulated vehicle as disarmed."""
+        self.armed = False
+
+    def send_velocity(self, vx, vy, vz, yaw_rate=0.0):
+        """Forward one world-frame velocity command to Gazebo."""
+        if self.armed:
+            self.velocity_callback(vx, vy, vz, yaw_rate)
+
+    def stop(self):
+        """Publish a zero velocity command."""
+        self.velocity_callback(0.0, 0.0, 0.0, 0.0)
+
+    def stop_and_disarm(self):
+        """Stop the simulated vehicle and mark it disarmed."""
+        self.stop()
+        self.disarm()

@@ -1,13 +1,30 @@
 <?xml version="1.0"?>
 <sdf version="1.10">
-  <!--
-    This is a visual placeholder, not a flight-dynamics model. It is static so
-    the first Gazebo launch is deterministic while the controller is developed.
-  -->
+  <!-- Kinematic 6-DOF model for controller integration testing. -->
   <model name="crazyflie">
-    <static>true</static>
+    <static>false</static>
 
     <link name="body">
+      <inertial>
+        <mass>0.027</mass>
+        <inertia>
+          <ixx>2.3951e-5</ixx>
+          <iyy>2.3951e-5</iyy>
+          <izz>3.2347e-5</izz>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyz>0</iyz>
+        </inertia>
+      </inertial>
+
+      <collision name="body_collision">
+        <geometry>
+          <box>
+            <size>0.075 0.055 0.012</size>
+          </box>
+        </geometry>
+      </collision>
+
       <visual name="center_deck">
         <geometry>
           <box>
@@ -83,5 +100,14 @@
         <material><diffuse>0.12 0.12 0.12 0.75</diffuse></material>
       </visual>
     </link>
+
+    <plugin filename="gz-sim-velocity-control-system"
+            name="gz::sim::systems::VelocityControl"/>
+
+    <plugin filename="gz-sim-odometry-publisher-system"
+            name="gz::sim::systems::OdometryPublisher">
+      <dimensions>3</dimensions>
+      <odom_publish_frequency>50</odom_publish_frequency>
+    </plugin>
   </model>
 </sdf>
