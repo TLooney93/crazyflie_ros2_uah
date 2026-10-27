@@ -1,6 +1,7 @@
 import os
 
 from ament_index_python.packages import get_package_share_directory
+from cf_control.config import DEFAULT_CRAZYFLIE_MISSION
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -46,6 +47,7 @@ def generate_launch_description():
                 'external_targets_enabled'
             ),
             'flight_mode': LaunchConfiguration('flight_mode'),
+            'mission_name': LaunchConfiguration('mission_name'),
         }],
         output='screen',
     )
@@ -70,6 +72,11 @@ def generate_launch_description():
             'flight_mode',
             default_value='autonomous',
             description='autonomous or external',
+        ),
+        DeclareLaunchArgument(
+            'mission_name',
+            default_value=DEFAULT_CRAZYFLIE_MISSION,
+            description='Mission from cf_control/crazyflie_mission.py',
         ),
         gazebo,
         bridge,

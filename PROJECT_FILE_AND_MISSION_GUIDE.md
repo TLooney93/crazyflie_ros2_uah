@@ -76,9 +76,15 @@ It contains:
 Change numeric tuning and mission geometry here when the mission structure is
 unchanged. Rebuild after modifying it.
 
+### `src/cf_control/cf_control/crazyflie_mission.py`
+
+The editable single-drone mission catalog. Autonomous missions are lists of
+validated waypoint or figure-eight phases. Add and tune normal single-drone
+sequences here instead of modifying the controller state machine.
+
 ### `src/cf_control/cf_control/crazyflie_node.py`
 
-The main ROS 2 controller and the authoritative mission implementation.
+The main ROS 2 controller and mission executor.
 
 Responsibilities:
 
@@ -92,10 +98,10 @@ Responsibilities:
 - Enforces the maximum flight time.
 - Stops and disarms during shutdown.
 
-The mission phase logic is in `_update_test_sequence()`. In external mode it
-takes off to `EXTERNAL_HOVER` and accepts bounded topic targets. Autonomous
-mode cannot be overwritten by topic commands. The public service state is
-separate from the internal mission phase.
+The node loads the selected sequence from `crazyflie_mission.py`. In external
+mode it takes off to `EXTERNAL_HOVER` and accepts bounded topic targets.
+Autonomous mode cannot be overwritten by topic commands. The public service
+state is separate from the internal mission phase.
 
 ### `src/cf_control/cf_control/flight_controller.py`
 
@@ -593,95 +599,58 @@ cfsim headless
 
 ## Change the autonomous mission sequence
 
-The sequence is implemented in
-`CrazyflieNode._update_test_sequence(position, now)` in
-`src/cf_control/cf_control/crazyflie_node.py`.
+Edit `src/cf_control/cf_control/crazyflie_mission.py`. The built-in names are
+`figure_eight`, `hover_test`, and `square_demo`.
 
-### Rules for adding a phase
-
-1. Give the phase a unique uppercase string.
-2. Set its target with `self.flight_controller.set_target(x, y, z)`.
-3. Use absolute world coordinates relative to `self.home_position`.
-4. Use `self._near(position, target)` for position completion.
-5. Use `self.test_phase_started_at` for timed completion.
-6. Change phases with `self._set_test_phase('NEXT_PHASE', now)`.
-7. Reset any phase-specific fields in `_stop_and_disarm()`.
-8. Leave landing and telemetry-loss behavior in the shared safety methods.
-
-### Example: insert a final hover after returning home
-
-Keep the end of `FIGURE_EIGHT` returning to the home target:
+Create a waypoint mission by adding a key to `CRAZYFLIE_MISSIONS`:
 
 ```python
-if progress >= 1.0:
-    self.test_feedforward = (0.0, 0.0, 0.0)
-    self.flight_controller.set_target(home_x, home_y, flight_z)
-    self._set_test_phase('RETURN_HOME', now)
-return
+'my_mission': [
+    {
+        'name': 'FORWARD',
+        'kind': 'waypoint',
+        'offset': (0.25, 0.0, 0.30),
+        'hold_s': 2.0,
+    },
+    {
+        'name': 'RETURN_HOME',
+        'kind': 'waypoint',
+        'offset': (0.0, 0.0, 0.30),
+        'hold_s': 1.0,
+    },
+],
 ```
 
-Change `RETURN_HOME` so reaching the target starts the timed hover:
+Offsets are `(x, y, z)` metres from the position recorded by `cfarm`.
+`hold_s` begins only after the drone reaches the waypoint and resets if it
+drifts outside the position tolerance. The last phase must finish above
+`(0, 0)` so the shared landing sequence begins from the launch point.
 
-```python
-if self.test_phase == 'RETURN_HOME':
-    target = (home_x, home_y, flight_z)
-    if self._near(position, target):
-        self._set_test_phase('FINAL_HOVER', now)
-    return
+The loader rejects duplicate/reserved phase names, non-finite values, targets
+outside the guarded flight volume, invalid durations, and missions that do
+not return home. The node automatically performs vertical takeoff to the
+first phase altitude and lands after the last phase.
+
+Select and test the mission with:
+
+```bash
+cfbuild
+cftest
+cfsim headless autonomous my_mission
 ```
 
-Then add the timed phase:
+For hardware, the optional fifth `cfsingle` argument selects the mission:
 
-```python
-if self.test_phase == 'FINAL_HOVER':
-    if now - self.test_phase_started_at >= 2.0:
-        self._begin_landing('Final hover complete')
-    return
+```bash
+cfsingle cf1 vicon /vicon/cf231/cf231 "" my_mission
 ```
 
-The split phases ensure the two-second timer starts only after the vehicle has
-returned home.
-
-### Example: waypoint mission pattern
-
-For a square or other waypoint list, define offsets in `config.py`:
-
-```python
-MISSION_WAYPOINT_OFFSETS_M = (
-    (0.30, 0.00, 0.30),
-    (0.30, 0.30, 0.30),
-    (0.00, 0.30, 0.30),
-    (0.00, 0.00, 0.30),
-)
-```
-
-Add `self.mission_waypoint_index = 0` during node initialization and reset it
-in `_stop_and_disarm()`. After takeoff/hover, enter `WAYPOINTS`. The phase can
-follow this pattern:
-
-```python
-if self.test_phase == 'WAYPOINTS':
-    offset = MISSION_WAYPOINT_OFFSETS_M[self.mission_waypoint_index]
-    target = (
-        home_x + offset[0],
-        home_y + offset[1],
-        floor_z + offset[2],
-    )
-    self.flight_controller.set_target(*target)
-
-    if self._near(position, target):
-        self.mission_waypoint_index += 1
-        if self.mission_waypoint_index == len(MISSION_WAYPOINT_OFFSETS_M):
-            self._begin_landing('Waypoint mission complete')
-    return
-```
-
-Do not copy this directly into hardware use without tests for index reset,
-empty waypoint lists, boundary limits, timeout behavior, and landing.
+The fourth argument remains the optional radio URI override. Always run the
+complete mission in Gazebo before selecting it for hardware.
 
 ## Change the figure-eight trajectory
 
-The figure-eight is generated inside the `FIGURE_EIGHT` branch using:
+The figure-eight executor in `crazyflie_node.py` uses:
 
 ```text
 x = home_x + radius * sin(angle)

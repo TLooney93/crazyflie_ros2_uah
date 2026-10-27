@@ -380,7 +380,13 @@ separate terminal for emergencies.
 
 ## Mission parameters
 
-Mission geometry, timing, controller gains, and safety limits are defined in:
+The selected sequence and its geometry are defined in:
+
+```text
+src/cf_control/cf_control/crazyflie_mission.py
+```
+
+Controller gains and shared safety limits are defined in:
 
 ```text
 src/cf_control/cf_control/config.py

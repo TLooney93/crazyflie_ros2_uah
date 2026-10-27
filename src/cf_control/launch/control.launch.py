@@ -1,6 +1,10 @@
 """Configurable hardware launch for single-drone and swarm control."""
 
-from cf_control.config import SWARM_MAX_FLIGHT_TIME_S
+from cf_control.config import (
+    DEFAULT_CRAZYFLIE_MISSION,
+    DEFAULT_SWARM_MISSION,
+    SWARM_MAX_FLIGHT_TIME_S,
+)
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
@@ -26,7 +30,9 @@ def _build_nodes(context):
     positioning_source = LaunchConfiguration(
         'positioning_source'
     ).perform(context).strip().lower()
-    mission_name = LaunchConfiguration('mission_name').perform(context).strip()
+    requested_mission = LaunchConfiguration(
+        'mission_name'
+    ).perform(context).strip()
     drone_ids = _comma_list(
         LaunchConfiguration('drone_ids').perform(context)
     )
@@ -45,6 +51,12 @@ def _build_nodes(context):
         raise ValueError('single mode requires exactly one drone_id')
     if mode == 'swarm' and len(drone_ids) < 2:
         raise ValueError('swarm mode requires at least two drone_ids')
+
+    mission_name = requested_mission or (
+        DEFAULT_CRAZYFLIE_MISSION
+        if mode == 'single'
+        else DEFAULT_SWARM_MISSION
+    )
 
     vicon_topics = _optional_values(context, 'vicon_topics', drone_ids)
     radio_uris = _optional_values(context, 'radio_uris', drone_ids)
@@ -71,6 +83,8 @@ def _build_nodes(context):
                 SWARM_MAX_FLIGHT_TIME_S if mode == 'swarm' else 35.0
             ),
         }
+        if mode == 'single':
+            parameters['mission_name'] = mission_name
         if vicon_topics[index]:
             parameters['vicon_pose_topic'] = vicon_topics[index]
         if radio_uris[index]:
@@ -139,8 +153,11 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'mission_name',
-            default_value='two_drone_demo',
-            description='Swarm mission from swarm_missions.py',
+            default_value='',
+            description=(
+                'Mission from crazyflie_mission.py or swarm_missions.py; '
+                'empty selects the appropriate default'
+            ),
         ),
         OpaqueFunction(function=_build_nodes),
     ])

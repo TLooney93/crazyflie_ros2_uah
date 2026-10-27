@@ -64,19 +64,19 @@ cfvicon 192.168.10.1 vicon
 |---|---|---|
 | `cfws` | none | Change to the ROS workspace. |
 | `cfbuild` | optional `colcon build` arguments | Build `cf_control` and `cf_gazebo`, then source the result. |
-| `cftest` | optional `colcon test` arguments | Run the 18 focused controller, interface, wand, and swarm tests. |
+| `cftest` | optional `colcon test` arguments | Run the focused controller, mission, interface, wand, and swarm tests. |
 | `cfcheck` | optional `colcon test` arguments | Run the complete `cf_control` suite, including legacy lint checks. |
 | `cfsource` | none | Re-source `install/setup.bash` after an external build. |
 | `cfgazebo` | `[gui\|headless]` | Start only the Gazebo world. It does not start the bridge or controller. |
-| `cfsim` | `[gui\|headless] [autonomous\|terminal\|wand]` | Start the complete single-drone Gazebo stack in the selected mode. |
+| `cfsim` | `[gui\|headless] [autonomous\|terminal\|wand] [mission]` | Start the complete single-drone Gazebo stack in the selected mode. |
 | `cfswarmsim` | `[gui\|headless] [mission_name] [autonomous\|terminal\|wand]` | Start the two-drone Gazebo swarm and coordinator. |
-| `cfrun` | `[drone_id] [vicon\|lighthouse] [vicon_topic] [wand_bool]` | Start the hardware Crazyflie node. Defaults to `cf1`, Vicon, and wand off. |
-| `cfsingle` | `[drone_id] [source] [vicon_topic] [radio_uri]` | Launch one hardware drone in autonomous mode. |
+| `cfrun` | `[drone_id] [vicon\|lighthouse] [vicon_topic] [wand_bool] [mission]` | Start the hardware Crazyflie node. Defaults to `cf1`, Vicon, wand off, and `figure_eight`. |
+| `cfsingle` | `[drone_id] [source] [vicon_topic] [radio_uri] [mission]` | Launch one hardware drone with a named autonomous mission. |
 | `cfterminal` | `[drone_id] [source] [vicon_topic] [radio_uri]` | Launch one hardware drone for bounded terminal position targets. |
 | `cfwandflight` | `[drone_id] [source] [vicon_topic] [radio_uri]` | Launch one hardware drone with guarded wand input. |
 | `cfswarm` | `ids source topics mission input radio_uris` | Launch the hardware swarm. Separate comma-delimited radio URIs are required. |
 | `cfarm` | `[drone_id]` | Arm after valid position checks. Defaults to `cf1`. |
-| `cftakeoff` | `[drone_id]` | Start the autonomous takeoff/hover/figure-eight/landing mission. |
+| `cftakeoff` | `[drone_id]` | Start the autonomous mission selected when the node was launched. |
 | `cfland` | `[drone_id]` | Request a controlled landing or disarm before takeoff. |
 | `cfstop` | `[drone_id]` | Immediately stop setpoints and disarm. This is not a controlled landing. |
 | `cfstate` | `[drone_id]` | Continuously display the public flight state. |
@@ -105,7 +105,7 @@ are intentionally exclusive; do not switch sources while airborne.
 
 | Vehicle set | Command source | Simulation | Hardware launch |
 |---|---|---|---|
-| Single | Built-in figure eight | `cfsim gui autonomous` | `cfsingle cf1 vicon TOPIC` |
+| Single | Named saved mission | `cfsim gui autonomous MISSION` | `cfsingle cf1 vicon TOPIC RADIO_URI MISSION` |
 | Single | Terminal target | `cfsim gui terminal` | `cfterminal cf1 vicon TOPIC` |
 | Single | Keyboard/physical wand | `cfsim gui wand` | `cfwandflight cf1 vicon TOPIC` |
 | Swarm | Saved formation mission | `cfswarmsim gui` | `cfswarm IDS vicon TOPICS MISSION autonomous RADIO_URIS` |
@@ -177,6 +177,13 @@ cfsim headless
 ```
 
 Use `cfsim` without `headless` for the graphical window.
+
+The default is `figure_eight`. To run another mission defined in
+`crazyflie_mission.py`, append its name, for example:
+
+```bash
+cfsim headless autonomous square_demo
+```
 
 ### Terminal 2 - state monitor
 
