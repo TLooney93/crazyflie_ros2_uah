@@ -14,14 +14,19 @@ def generate_launch_description():
     headless = LaunchConfiguration('headless')
     gazebo_share = get_package_share_directory('ros_gz_sim')
     simulation_share = get_package_share_directory('cf_gazebo')
-    world = os.path.join(
+    default_world = os.path.join(
         simulation_share, 'worlds', 'crazyflie_world.sdf'
     )
+    world = LaunchConfiguration('world')
     model_path = os.path.join(simulation_share, 'models')
 
     gazebo_resource_path = SetEnvironmentVariable(
         name='GZ_SIM_RESOURCE_PATH',
-        value=model_path + os.pathsep + os.environ.get('GZ_SIM_RESOURCE_PATH', ''),
+        value=(
+            model_path
+            + os.pathsep
+            + os.environ.get('GZ_SIM_RESOURCE_PATH', '')
+        ),
     )
 
     declare_headless = DeclareLaunchArgument(
@@ -30,12 +35,18 @@ def generate_launch_description():
         description='Run only the Gazebo server without the OpenGL GUI',
     )
 
+    declare_world = DeclareLaunchArgument(
+        'world',
+        default_value=default_world,
+        description='Absolute path to the Gazebo world file',
+    )
+
     gazebo_gui = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(gazebo_share, 'launch', 'gz_sim.launch.py')
         ),
         launch_arguments={
-            'gz_args': f'-r -v 4 {world}',
+            'gz_args': ['-r -v 4 ', world],
             'on_exit_shutdown': 'true',
         }.items(),
         condition=UnlessCondition(headless),
@@ -46,7 +57,7 @@ def generate_launch_description():
             os.path.join(gazebo_share, 'launch', 'gz_sim.launch.py')
         ),
         launch_arguments={
-            'gz_args': f'-s -r -v 4 {world}',
+            'gz_args': ['-s -r -v 4 ', world],
             'on_exit_shutdown': 'true',
         }.items(),
         condition=IfCondition(headless),
@@ -54,6 +65,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         declare_headless,
+        declare_world,
         gazebo_resource_path,
         gazebo_gui,
         gazebo_headless,

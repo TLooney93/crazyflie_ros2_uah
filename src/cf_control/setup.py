@@ -25,6 +25,10 @@ setup(
             os.path.join('share', package_name, 'config', 'lighthouse'),
             glob('config/lighthouse/*.yaml')
         ),
+        (
+            os.path.join('share', package_name, 'launch'),
+            glob('launch/*.launch.py')
+        ),
     ],
 
     install_requires=['cflib', 'setuptools'],
@@ -45,6 +49,9 @@ setup(
     entry_points={
         'console_scripts': [
           'crazyflie_node = cf_control.crazyflie_node:main',
+          'swarm_node = cf_control.swarm_node:main',
+          'wand_node = cf_control.wand_node:main',
+          'wand_driver_node = cf_control.wand_driver_node:main',
         ],
     },
 )

@@ -32,6 +32,15 @@ class CrazyflieInterfaceTest(unittest.TestCase):
             4.0,
         )
 
+    def test_external_position_is_forwarded_to_estimator(self):
+        self.interface.send_external_position(0.1, -0.2, 0.3)
+
+        self.scf.cf.extpos.send_extpos.assert_called_once_with(
+            0.1,
+            -0.2,
+            0.3,
+        )
+
     def test_stop_and_disarm_sends_all_safety_commands(self):
         parent = Mock()
         parent.attach_mock(

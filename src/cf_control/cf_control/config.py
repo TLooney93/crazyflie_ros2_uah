@@ -38,15 +38,68 @@ POSITION_KP = 0.5
 TELEMETRY_PERIOD_MS = 100
 POSITION_TIMEOUT_S = 0.5
 
+# Crazyflie firmware estimator selection: 2 selects the Kalman estimator.
+KALMAN_ESTIMATOR = 2
+VICON_ESTIMATOR_MAX_ERROR_M = 0.5
+
 
 # ************* FIRST FLIGHT TEST ***************
 
-# The first test is intentionally limited to a vertical takeoff and landing.
+# Autonomous flight-test geometry and timing.
+DEFAULT_CRAZYFLIE_MISSION = 'figure_eight'
 FLIGHT_TEST_HEIGHT_M = 0.30
+FLIGHT_TEST_HOVER_S = 3.0
+FLIGHT_TEST_FIGURE_EIGHT_RADIUS_M = 0.35
+FLIGHT_TEST_FIGURE_EIGHT_DURATION_S = 20.0
+FLIGHT_TEST_POSITION_TOLERANCE_M = 0.08
 ARM_SETTLE_TIME_S = 1.0
 LANDING_HEIGHT_M = 0.05
 LANDING_COMPLETE_TOLERANCE_M = 0.03
 LANDING_SPEED_M_S = 0.10
-MAX_FLIGHT_TIME_S = 10.0
+# Safety timeout for takeoff, hover, figure eight, and landing.
+MAX_FLIGHT_TIME_S = 35.0
 TELEMETRY_LOSS_DESCENT_S = 3.0
 ENABLE_EXTERNAL_TARGETS = False
+
+# Bounds applied whenever a ROS topic is used as the position-command source.
+# Targets are absolute world coordinates, but are constrained relative to the
+# position recorded when the vehicle was armed.
+EXTERNAL_MAX_HORIZONTAL_OFFSET_M = 0.75
+EXTERNAL_MIN_HEIGHT_M = 0.10
+EXTERNAL_MAX_HEIGHT_M = 0.75
+
+
+# ************* SWARM CONTROL ***************
+
+DEFAULT_SWARM_MISSION = 'two_drone_demo'
+SWARM_CONTROL_RATE_HZ = 10.0
+SWARM_POSITION_TOLERANCE_M = 0.07
+SWARM_MIN_SEPARATION_M = 0.25
+SWARM_TAKEOFF_TIMEOUT_S = 12.0
+SWARM_MAX_FLIGHT_TIME_S = 90.0
+
+
+# ************* WAND CONTROL ***************
+
+WAND_GESTURE_TOPIC = '/wand/gesture'
+WAND_POSE_TOPIC = '/wand/pose'
+WAND_ENABLED_TOPIC = '/wand/enabled'
+WAND_CONNECTED_TOPIC = '/wand/connected'
+WAND_FRAME_ID = 'world'
+WAND_SIMULATION_STEP_M = 0.05
+WAND_TARGET_STEP_M = 0.05
+WAND_MAX_HORIZONTAL_OFFSET_M = 0.50
+WAND_TILT_TRIGGER_DEG = 20.0
+WAND_TILT_REPEAT_S = 0.25
+
+VALID_WAND_GESTURES = {
+    'enable',
+    'disable',
+    'takeoff',
+    'land',
+    'move_left',
+    'move_right',
+    'move_forward',
+    'move_backward',
+    'hold',
+}

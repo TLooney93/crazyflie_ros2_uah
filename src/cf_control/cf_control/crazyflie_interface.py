@@ -26,9 +26,9 @@ class CrazyflieInterface:
         """Send one velocity setpoint in the world coordinate frame.
 
         Args:
-            vx: Requested velocity along the world x-axis, in metres per second.
-            vy: Requested velocity along the world y-axis, in metres per second.
-            vz: Requested velocity along the world z-axis, in metres per second.
+            vx: Requested velocity along the world x-axis, in meters per second.
+            vy: Requested velocity along the world y-axis, in meters per second.
+            vz: Requested velocity along the world z-axis, in meters per second.
             yaw_rate: Requested turning rate, in degrees per second. Defaults to
                 zero.
 
@@ -40,6 +40,10 @@ class CrazyflieInterface:
             vz,
             yaw_rate
         )
+
+    def send_external_position(self, x, y, z):
+        """Forward one external position measurement to the estimator."""
+        self.scf.cf.extpos.send_extpos(x, y, z)
 
     def stop(self):
         """Send a motor-stop setpoint, which does not perform a landing."""

@@ -7,10 +7,17 @@ from cflib.crazyflie.log import LogConfig
 
 class TelemetryReader:
 
-    def __init__(self, scf, callback, period_ms=100):
+    def __init__(
+        self,
+        scf,
+        callback,
+        period_ms=100,
+        include_attitude=False,
+    ):
         self.scf = scf
         self.callback = callback
         self.period_ms = period_ms
+        self.include_attitude = include_attitude
         self._samples = Queue(maxsize=1)
 
         self.running = False
@@ -71,6 +78,10 @@ class TelemetryReader:
         log_config.add_variable('stateEstimate.x', 'float')
         log_config.add_variable('stateEstimate.y', 'float')
         log_config.add_variable('stateEstimate.z', 'float')
+        if self.include_attitude:
+            log_config.add_variable('stabilizer.roll', 'float')
+            log_config.add_variable('stabilizer.pitch', 'float')
+            log_config.add_variable('stabilizer.yaw', 'float')
         self.scf.cf.log.add_config(log_config)
         log_config.data_received_cb.add_callback(self._on_log_data)
 
@@ -93,5 +104,4 @@ class TelemetryReader:
             log_config.data_received_cb.remove_callback(self._on_log_data)
             log_config.stop()
             log_config.delete()
-
 

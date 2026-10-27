@@ -39,6 +39,13 @@ def generate_launch_description():
             'drone_id': 'cf1',
             'simulation': True,
             'use_sim_time': True,
+            'wand_control_enabled': LaunchConfiguration(
+                'wand_control_enabled'
+            ),
+            'external_targets_enabled': LaunchConfiguration(
+                'external_targets_enabled'
+            ),
+            'flight_mode': LaunchConfiguration('flight_mode'),
         }],
         output='screen',
     )
@@ -48,6 +55,21 @@ def generate_launch_description():
             'headless',
             default_value='false',
             description='Run Gazebo without its graphical interface',
+        ),
+        DeclareLaunchArgument(
+            'wand_control_enabled',
+            default_value='false',
+            description='Subscribe to guarded wand command topics',
+        ),
+        DeclareLaunchArgument(
+            'external_targets_enabled',
+            default_value='false',
+            description='Accept bounded targets from the ROS topic',
+        ),
+        DeclareLaunchArgument(
+            'flight_mode',
+            default_value='autonomous',
+            description='autonomous or external',
         ),
         gazebo,
         bridge,
