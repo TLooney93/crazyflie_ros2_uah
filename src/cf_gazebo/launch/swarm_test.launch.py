@@ -82,6 +82,7 @@ def _build_simulation(context):
                 'flight_mode': 'external',
                 'external_targets_enabled': not wand_enabled,
                 'wand_control_enabled': wand_enabled,
+                'wand_mission_gestures_enabled': False,
                 'max_flight_time_s': 90.0,
             }],
             output='screen',

@@ -42,7 +42,7 @@ from cf_control.flight_controller import FlightController
 from cf_control.flight_state import FlightState
 from cf_control.lighthouse import LighthouseManager
 from cf_control.telemetry import TelemetryReader
-from cf_control.wand_control import tilt_to_unit_offset
+from cf_control.wand_control import gesture_action, tilt_to_unit_offset
 from cflib.crazyflie import Crazyflie
 from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
 import cflib.crtp
@@ -65,6 +65,7 @@ class CrazyflieNode(Node):
         self.declare_parameter('positioning_source', 'vicon')
         self.declare_parameter('vicon_pose_topic', '')
         self.declare_parameter('wand_control_enabled', False)
+        self.declare_parameter('wand_mission_gestures_enabled', True)
         self.declare_parameter(
             'external_targets_enabled',
             ENABLE_EXTERNAL_TARGETS,
@@ -82,6 +83,9 @@ class CrazyflieNode(Node):
         ).value.lower()
         self.wand_control_enabled = bool(
             self.get_parameter('wand_control_enabled').value
+        )
+        self.wand_mission_gestures_enabled = bool(
+            self.get_parameter('wand_mission_gestures_enabled').value
         )
         self.external_targets_enabled = bool(
             self.get_parameter('external_targets_enabled').value
@@ -503,13 +507,15 @@ class CrazyflieNode(Node):
             )
             return
 
-        if gesture == 'land':
+        action = gesture_action(gesture)
+
+        if action == 'land':
             if self.flight_state in (FlightState.READY, FlightState.FLYING):
                 response = type('Response', (), {})()
                 self.land_callback(None, response)
             return
 
-        if gesture == 'enable':
+        if action == 'enable':
             if self.flight_state is FlightState.LANDING:
                 self.get_logger().warning(
                     'Cannot enable wand control while landing'
@@ -525,7 +531,7 @@ class CrazyflieNode(Node):
             )
             return
 
-        if gesture == 'disable':
+        if action == 'disable':
             self.wand_active = False
             self.wand_reference_orientation = None
             if self.flight_state is FlightState.FLYING:
@@ -538,7 +544,7 @@ class CrazyflieNode(Node):
             )
             return
 
-        if gesture == 'takeoff':
+        if action == 'takeoff':
             response = type('Response', (), {})()
             response = self._start_takeoff(response, wand_mode=True)
             if not response.success:
@@ -547,8 +553,28 @@ class CrazyflieNode(Node):
                 self.get_logger().info(response.message)
             return
 
-        if gesture == 'hold':
+        if action == 'hold':
             self._hold_current_position('Wand hold requested')
+            return
+
+        if action == 'start_mission':
+            if not self.wand_mission_gestures_enabled:
+                self.get_logger().warning(
+                    'Ignoring mission gesture: disabled for this launch mode'
+                )
+                return
+            if (
+                self.flight_state is not FlightState.FLYING
+                or self.test_phase != 'WAND_HOVER'
+            ):
+                self.get_logger().warning(
+                    'Ignoring mission gesture until wand hover is stable'
+                )
+                return
+            self._set_mission_phase(0, time.monotonic())
+            self.get_logger().info(
+                f'Wand started mission {self.mission_name!r}'
+            )
             return
 
         offsets = {
@@ -557,8 +583,8 @@ class CrazyflieNode(Node):
             'move_left': (0.0, 1.0),
             'move_right': (0.0, -1.0),
         }
-        if gesture in offsets:
-            self._move_wand_target(*offsets[gesture])
+        if action in offsets:
+            self._move_wand_target(*offsets[action])
 
     def wand_pose_callback(self, msg):
         """Use physical-wand tilt as bounded horizontal movement input."""

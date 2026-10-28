@@ -73,7 +73,7 @@ cfvicon 192.168.10.1 vicon
 | `cfrun` | `[drone_id] [vicon\|lighthouse] [vicon_topic] [wand_bool] [mission]` | Start the hardware Crazyflie node. Defaults to `cf1`, Vicon, wand off, and `figure_eight`. |
 | `cfsingle` | `[drone_id] [source] [vicon_topic] [radio_uri] [mission]` | Launch one hardware drone with a named autonomous mission. |
 | `cfterminal` | `[drone_id] [source] [vicon_topic] [radio_uri]` | Launch one hardware drone for bounded terminal position targets. |
-| `cfwandflight` | `[drone_id] [source] [vicon_topic] [radio_uri]` | Launch one hardware drone with guarded wand input. |
+| `cfwandflight` | `[drone_id] [source] [vicon_topic] [radio_uri] [mission]` | Launch one hardware drone with guarded wand input and a selectable gesture-started mission. |
 | `cfswarm` | `[profile] [input] [source] [mission] [radio_uris] [vicon_topics]` | Launch a named hardware swarm profile. A comma-separated ID list as the first argument retains the explicit legacy form. |
 | `cfarm` | `[drone_id]` | Arm after valid position checks. Defaults to `cf1`. |
 | `cftakeoff` | `[drone_id]` | Start the autonomous mission selected when the node was launched. |
@@ -85,6 +85,7 @@ cfvicon 192.168.10.1 vicon
 | `cfw` | none | Start the keyboard wand command prompt without publishing a fake pose. |
 | `cfwand` | none | Backward-compatible name for `cfw`. |
 | `cfwandsim` | none | Start the keyboard wand and also publish its simulated pose. |
+| `cfwandgesture` | `[vicon_pose_topic]` | Recognize up/down, side-to-side, and down/up mission gestures from a Vicon wand. Defaults to `/vicon/wand/wand`. |
 | `cfwanddriver` | `[wand_id] [wand_uri]` | Read pose and attitude from the physical wand. Defaults to `cf2`. |
 | `cfswarmstart` | none | Run swarm arm, takeoff, configured mission, and landing. |
 | `cfswarmarm` | none | Arm all swarm members. |
@@ -360,6 +361,17 @@ move_right
 move_forward
 move_backward
 hold
+up_down
+side_to_side
+down_up
+```
+
+The three tracked-motion events map to guarded actions:
+
+```text
+up_down      -> takeoff
+side_to_side -> start the selected single-drone mission from WAND_HOVER
+down_up      -> controlled landing
 ```
 
 ## Test 7: Profile-selected swarm mission in Gazebo
@@ -567,7 +579,7 @@ Wait at least one second, then:
 cftakeoff cf1
 ```
 
-## Test 11: Physical cf2 wand with Vicon-controlled cf1
+## Test 11: Vicon wand gestures with Vicon-controlled cf1
 
 Use a second Crazyradio if the two separate processes cannot share one radio.
 Remove all props from the handheld `cf2`.
@@ -582,10 +594,30 @@ cfvicon 192.168.10.1 vicon
 
 ```bash
 cfenv
-cfwandflight cf1 vicon /vicon/cf231/cf231
+cfwandflight cf1 vicon /vicon/cf231/cf231 "" hover_test
 ```
 
-### Terminal 3 - physical wand driver
+### Terminal 3 - Vicon gesture recognizer
+
+Use the actual Vicon subject and segment topic for the tracked wand:
+
+```bash
+cfenv
+cfwandgesture /vicon/wand/wand
+```
+
+Verify recognition without props first:
+
+```bash
+ros2 topic echo /wand/gesture
+```
+
+Expected events are `up_down`, `side_to_side`, and `down_up`.
+
+### Optional physical wand attitude driver
+
+The radio driver is needed only when tilt-to-position control is also being
+tested. Vicon position gesture recognition does not require this process.
 
 Using the configured radio URI:
 
@@ -600,7 +632,7 @@ Using a second Crazyradio at index 1:
 cfwanddriver cf2 radio://1/80/2M/E7E7E7E7E6
 ```
 
-### Terminal 4 - wand verification
+### Terminal 4 - optional tilt verification
 
 ```bash
 cfenv
@@ -628,20 +660,27 @@ cfenv
 cfw
 ```
 
-Hold the wand level and enter:
+Enter this once to enable guarded wand actions:
 
 ```text
 enable
-takeoff
 ```
 
-Wait for `WAND_HOVER`. Tilting more than 20 degrees advances the target by
+After arming, move the tracked wand up at least 0.15 m and return it near its
+starting height within two seconds. This publishes `up_down` and requests
+takeoff. Wait for `WAND_HOVER`.
+
+Move the wand at least 0.15 m to one horizontal side and then at least 0.15 m
+past its starting position to the opposite side. This publishes
+`side_to_side` and starts the selected single-drone mission.
+
+Move the wand down at least 0.15 m and return it near its starting height to
+publish `down_up` and request controlled landing.
+
+When the optional attitude driver is running, tilting more than 20 degrees
+also advances the target by
 0.05 m every 0.25 seconds. Return the wand to neutral to stop advancing the
-target. Finish with:
-
-```text
-land
-```
+target.
 
 ### Five-drone simulation variant
 

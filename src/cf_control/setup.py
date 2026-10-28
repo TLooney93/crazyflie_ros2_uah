@@ -52,6 +52,7 @@ setup(
           'swarm_node = cf_control.swarm_node:main',
           'wand_node = cf_control.wand_node:main',
           'wand_driver_node = cf_control.wand_driver_node:main',
+          'wand_gesture_node = cf_control.wand_gesture_node:main',
         ],
     },
 )

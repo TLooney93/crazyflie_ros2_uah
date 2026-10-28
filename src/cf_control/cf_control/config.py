@@ -5,8 +5,8 @@ from pathlib import Path
 # 'cf*' with its radio address as the key value pair
 
 DRONES = {
-    'cf1' : 'radio://0/80/2M/E7E7E7E7E7',
-    'cf2' : 'radio://0/80/2M/E7E7E7E7E6',
+    'cf1': 'radio://0/80/2M/E7E7E7E7E7',
+    'cf2': 'radio://0/80/2M/E7E7E7E7E6',
 }
 
 
@@ -14,7 +14,7 @@ DRONES = {
 CACHE_DIR = Path.home() / 'dev' / 'crazyflie' / 'cache'
 
 
-#**********  FLIGHT PARAMETERS  ****************
+# **********  FLIGHT PARAMETERS  ****************
 
 # Default target z-coordinate of 0.5 metres in our shared positioning frame.
 DEFAULT_HEIGHT = 0.5       # meters
@@ -24,7 +24,7 @@ MAX_VELOCITY = 0.3        # m/s per axis
 MAX_YAW_RATE = 45.0       # deg/s
 
 
-#*************  CONTROL  *****************
+# *************  CONTROL  *****************
 
 # Determines the intended frequency of the drone node’s control timer
 CONTROL_RATE_HZ = 20.0
@@ -33,7 +33,7 @@ CONTROL_RATE_HZ = 20.0
 POSITION_KP = 0.5
 
 
-#*************  TELEMETRY  ***************
+# *************  TELEMETRY  ***************
 # sets the requested interval between position measurements
 TELEMETRY_PERIOD_MS = 100
 POSITION_TIMEOUT_S = 0.5
@@ -84,6 +84,7 @@ SWARM_MAX_FLIGHT_TIME_S = 90.0
 
 WAND_GESTURE_TOPIC = '/wand/gesture'
 WAND_POSE_TOPIC = '/wand/pose'
+WAND_VICON_POSE_TOPIC = '/vicon/wand/wand'
 WAND_ENABLED_TOPIC = '/wand/enabled'
 WAND_CONNECTED_TOPIC = '/wand/connected'
 WAND_FRAME_ID = 'world'
@@ -92,6 +93,18 @@ WAND_TARGET_STEP_M = 0.05
 WAND_MAX_HORIZONTAL_OFFSET_M = 0.50
 WAND_TILT_TRIGGER_DEG = 20.0
 WAND_TILT_REPEAT_S = 0.25
+WAND_GESTURE_VERTICAL_TRAVEL_M = 0.15
+WAND_GESTURE_HORIZONTAL_TRAVEL_M = 0.15
+WAND_GESTURE_RETURN_TOLERANCE_M = 0.05
+WAND_GESTURE_MAX_DURATION_S = 2.0
+WAND_GESTURE_COOLDOWN_S = 2.0
+WAND_GESTURE_BASELINE_ALPHA = 0.02
+
+WAND_GESTURE_ACTIONS = {
+    'up_down': 'takeoff',
+    'side_to_side': 'start_mission',
+    'down_up': 'land',
+}
 
 VALID_WAND_GESTURES = {
     'enable',
@@ -103,4 +116,5 @@ VALID_WAND_GESTURES = {
     'move_forward',
     'move_backward',
     'hold',
+    *WAND_GESTURE_ACTIONS,
 }

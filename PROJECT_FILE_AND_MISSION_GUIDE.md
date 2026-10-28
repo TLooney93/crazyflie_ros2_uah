@@ -177,6 +177,8 @@ estimator-reset helper but receives measurements from ROS.
 Pure wand math and validation helpers:
 
 - Normalizes gesture names.
+- Recognizes three-part position gestures from tracked XYZ samples.
+- Maps completed gestures to guarded flight actions.
 - Updates the keyboard wand's simulated position.
 - Converts Euler angles and quaternions.
 - Converts relative wand tilt into a world-frame XY direction.
@@ -198,6 +200,14 @@ pose publisher. It publishes:
 
 This node does not command the drone directly. The main flight node applies
 all safety and state checks.
+
+### `src/cf_control/cf_control/wand_gesture_node.py`
+
+Vicon position gesture recognizer. It subscribes to a configurable tracked
+wand `PoseStamped` topic and publishes one event on `/wand/gesture` only after
+a complete motion. The initial mappings are `up_down` for takeoff,
+`side_to_side` for starting the selected single-drone mission, and `down_up`
+for landing. Use `cfwandgesture [vicon_pose_topic]` to run it.
 
 ### `src/cf_control/cf_control/wand_driver_node.py`
 
@@ -506,11 +516,14 @@ LANDING
 A wand `takeoff` sets:
 
 ```text
-WAND_TAKEOFF -> WAND_HOVER -> LANDING
+WAND_TAKEOFF -> WAND_HOVER
 ```
 
 `WAND_HOVER` holds the last target and accepts bounded direction or tilt
-commands. It does not execute the autonomous figure-eight.
+commands. A recognized `side_to_side` event may start the selected
+single-drone mission from this stable hover. The mission then uses its normal
+phase executor and lands when complete. A `down_up` event requests landing at
+any point. Swarm mission gestures remain disabled during the initial test.
 
 ### Terminal/external phases
 

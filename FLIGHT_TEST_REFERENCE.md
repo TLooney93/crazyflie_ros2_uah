@@ -274,11 +274,12 @@ nmcli connection down "Wired connection 1"
 
 ## Wand-control mode
 
-Wand control is opt-in and does not replace the autonomous figure-eight.
+Wand control is opt-in. It begins in guarded hover control; a completed
+side-to-side Vicon gesture can start the mission selected at launch.
 Start the hardware controller in wand mode with:
 
 ```bash
-cfwandflight cf1 vicon /vicon/cf231/cf231
+cfwandflight cf1 vicon /vicon/cf231/cf231 "" hover_test
 ```
 
 The wand cannot arm the drone. Arming remains a deliberate terminal command,
@@ -377,6 +378,30 @@ While a tilt is held, the target advances by 0.05 m every 0.25 seconds. Enter
 `disable` to stop accepting wand movement and hold the current position. Enter
 `land` even if the wand has been disabled. Keep `cfstop cf1` ready in a
 separate terminal for emergencies.
+
+### Vicon position gestures
+
+When the wand is a tracked Vicon rigid body, start the gesture recognizer with
+its actual subject and segment topic:
+
+```bash
+cfenv
+cfwandgesture /vicon/wand/wand
+```
+
+The initial test mappings are:
+
+```text
+up then back to baseline              -> takeoff
+one horizontal side to the other      -> start selected mission
+down then back to baseline            -> land
+```
+
+Vertical and horizontal travel must reach 0.15 m. Gestures must complete
+within two seconds and have a two-second cooldown. The drone must still be
+armed from the terminal, and wand actions must first be enabled with `cfw` or
+a one-shot `enable` message. Mission gestures are enabled only for a
+single-drone launch during this initial test implementation.
 
 ## Mission parameters
 

@@ -43,6 +43,7 @@ def generate_launch_description():
             'wand_control_enabled': LaunchConfiguration(
                 'wand_control_enabled'
             ),
+            'wand_mission_gestures_enabled': True,
             'external_targets_enabled': LaunchConfiguration(
                 'external_targets_enabled'
             ),

@@ -127,6 +127,7 @@ def _build_nodes(context):
             'simulation': False,
             'positioning_source': positioning_source,
             'wand_control_enabled': wand_enabled,
+            'wand_mission_gestures_enabled': mode == 'single',
             'external_targets_enabled': external_enabled,
             'flight_mode': flight_mode,
             'max_flight_time_s': (

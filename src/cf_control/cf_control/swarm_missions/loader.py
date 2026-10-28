@@ -1,7 +1,7 @@
 """
 Registry and validation for saved swarm missions.
 
-Offsets are metres relative to each drone's position when it was armed. To
+Offsets are meters relative to each drone's position when it was armed. To
 register a mission, import its ``MISSION_NAME`` and ``MISSION`` below and add
 that pair to ``SWARM_MISSIONS``.
 """
