@@ -17,6 +17,11 @@ class CrazyflieInterface:
         """
         self.scf.cf.param.set_value(name, str(value))
 
+    def disable_lighthouse_streams(self):
+        """Disable legacy Lighthouse angle packets when Vicon is in use."""
+        self.set_parameter('locSrv.enLhAngleStream', 0)
+        self.set_parameter('locSrv.enLhMtchStm', 0)
+
     def send_external_pose(self, position, quaternion):
         """Forward a motion-capture pose to the onboard estimator."""
         x, y, z = position

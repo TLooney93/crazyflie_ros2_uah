@@ -5,6 +5,17 @@ from unittest.mock import Mock
 from cf_control.crazyflie_interface import CrazyflieInterface
 
 
+def test_disable_lighthouse_streams():
+    scf = Mock()
+    interface = CrazyflieInterface(scf)
+
+    interface.disable_lighthouse_streams()
+
+    calls = scf.cf.param.set_value.call_args_list
+    assert calls[0].args == ('locSrv.enLhAngleStream', '0')
+    assert calls[1].args == ('locSrv.enLhMtchStm', '0')
+
+
 def test_arm_and_disarm_request():
     scf = Mock()
     interface = CrazyflieInterface(scf)

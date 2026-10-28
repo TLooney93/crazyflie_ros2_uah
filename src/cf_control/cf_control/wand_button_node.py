@@ -66,6 +66,8 @@ class WandButtonNode(Node):
             self.uri, cf=Crazyflie(rw_cache=str(CACHE_DIR))
         )
         self.scf.open_link()
+        self.scf.cf.param.set_value('locSrv.enLhAngleStream', '0')
+        self.scf.cf.param.set_value('locSrv.enLhMtchStm', '0')
         self.log_config = LogConfig(name='WandButtons', period_in_ms=50)
         for variable in self.BUTTONS:
             self.log_config.add_variable(variable, 'uint8_t')

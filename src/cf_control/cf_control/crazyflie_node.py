@@ -299,6 +299,7 @@ class CrazyflieNode(Node):
             f'Connecting to {self.drone_id}: {self.uri}'
         )
         self.scf.open_link()
+        self.command_interface.disable_lighthouse_streams()
         self.command_interface.set_parameter('stabilizer.estimator', 2)
         self.command_interface.reset_estimator()
         self.estimator_reset = True
