@@ -51,6 +51,8 @@ setup(
           'wand_button_node = cf_control.wand_button_node:main',
           'wand_gesture_node = cf_control.wand_gesture_node:main',
           'flight_wand_node = cf_control.flight_wand_node:main',
+          'gesture_trial_logger = cf_control.gesture_trial_logger:main',
+          'r2_command_test = cf_control.r2_command_test:main',
         ],
     },
 )
