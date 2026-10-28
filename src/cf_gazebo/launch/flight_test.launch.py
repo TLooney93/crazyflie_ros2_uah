@@ -76,7 +76,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'mission_name',
             default_value=DEFAULT_CRAZYFLIE_MISSION,
-            description='Mission from cf_control/crazyflie_mission.py',
+            description='Mission from cf_control/crazyflie_missions/',
         ),
         gazebo,
         bridge,

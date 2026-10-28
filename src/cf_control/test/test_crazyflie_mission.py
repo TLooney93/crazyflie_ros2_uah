@@ -2,7 +2,7 @@
 
 import copy
 
-from cf_control.crazyflie_mission import (
+from cf_control.crazyflie_missions import (
     CRAZYFLIE_MISSIONS,
     load_crazyflie_mission,
 )
@@ -51,7 +51,7 @@ def test_invalid_waypoint_is_rejected(monkeypatch):
         'hold_s': 0.0,
     }]
     monkeypatch.setattr(
-        'cf_control.crazyflie_mission.CRAZYFLIE_MISSIONS',
+        'cf_control.crazyflie_missions.loader.CRAZYFLIE_MISSIONS',
         missions,
     )
 
@@ -69,7 +69,7 @@ def test_mission_must_return_home_before_landing(monkeypatch):
         'hold_s': 0.0,
     }]
     monkeypatch.setattr(
-        'cf_control.crazyflie_mission.CRAZYFLIE_MISSIONS',
+        'cf_control.crazyflie_missions.loader.CRAZYFLIE_MISSIONS',
         missions,
     )
 

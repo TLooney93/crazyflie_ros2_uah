@@ -42,7 +42,7 @@ crazyflie_node.py
 Swarm control keeps the same per-drone safety path:
 
 ```text
-swarm_missions.py
+swarm_missions/<mission_name>.py
   named phase offsets and hold times
         |
         v
@@ -76,11 +76,12 @@ It contains:
 Change numeric tuning and mission geometry here when the mission structure is
 unchanged. Rebuild after modifying it.
 
-### `src/cf_control/cf_control/crazyflie_mission.py`
+### `src/cf_control/cf_control/crazyflie_missions/`
 
-The editable single-drone mission catalog. Autonomous missions are lists of
-validated waypoint or figure-eight phases. Add and tune normal single-drone
-sequences here instead of modifying the controller state machine.
+One file per editable single-drone mission, plus `loader.py`, which registers
+and validates them. Autonomous missions are lists of waypoint or figure-eight
+phases. Add and tune sequences here instead of modifying the controller state
+machine.
 
 ### `src/cf_control/cf_control/crazyflie_node.py`
 
@@ -98,7 +99,7 @@ Responsibilities:
 - Enforces the maximum flight time.
 - Stops and disarms during shutdown.
 
-The node loads the selected sequence from `crazyflie_mission.py`. In external
+The node loads the selected sequence through `crazyflie_missions/loader.py`. In external
 mode it takes off to `EXTERNAL_HOVER` and accepts bounded topic targets.
 Autonomous mode cannot be overwritten by topic commands. The public service
 state is separate from the internal mission phase.
@@ -225,12 +226,26 @@ It:
 - In wand group mode, leaves movement to the common gesture topic while it
   monitors group takeoff, position freshness, and actual separation.
 
-### `src/cf_control/cf_control/swarm_missions.py`
+Swarm membership is supplied by the launch layer. Do not add vehicle names to
+the default `drone_ids` parameter in this file.
 
-The normal file to edit when designing a swarm choreography. Each named
-mission is a list of phases with a name, a hold time, and one XYZ offset per
-drone. Offsets are relative to each vehicle's independently recorded home
-position. Definitions are validated before the coordinator starts.
+### `src/cf_control/cf_control/swarm_profiles/`
+
+Named vehicle rosters for routine launches. Each profile file defines the
+ordered drone IDs, Vicon topics, radio URIs, default mission, and matching
+Gazebo world. `loader.py` registers and validates the files. Add or remove
+physical swarm members in that profile's file.
+
+The bundled profiles are `two_drone_lab` and `five_drone_lab`. The five-drone
+profile can run in simulation immediately, but its `cf3` through `cf5` radio
+URIs are intentionally blank until the actual addresses are scanned.
+
+### `src/cf_control/cf_control/swarm_missions/`
+
+One file per swarm choreography, plus `loader.py`, which registers and
+validates them. Each mission is a list of phases with a name, a hold time, and
+one XYZ offset per drone. Offsets are relative to each vehicle's independently
+recorded home position.
 
 ### `src/cf_control/cf_control/__init__.py`
 
@@ -278,11 +293,12 @@ and adds `swarm_node` for multi-drone modes. Launch arguments select:
 ```text
 mode: single | swarm
 input: autonomous | terminal | wand
+profile_name: optional registered swarm profile name
 drone_ids: comma-separated names
 positioning_source: vicon | lighthouse
 vicon_topics: comma-separated PoseStamped topics
 radio_uris: optional comma-separated URI overrides
-mission_name: swarm_missions.py key
+mission_name: registered mission name
 ```
 
 The `cfsingle`, `cfterminal`, `cfwandflight`, and `cfswarm` helpers build these
@@ -313,8 +329,8 @@ Use `cfsim gui autonomous`, `cfsim gui terminal`, or `cfsim gui wand`.
 
 ### `src/cf_gazebo/launch/swarm_test.launch.py`
 
-Starts the two-model Gazebo world, bridges both vehicles, starts one simulated
-controller per vehicle, and starts the real swarm coordinator. It accepts
+Loads a named swarm profile, selects its Gazebo world, generates one bridge
+and controller per vehicle, and starts the real swarm coordinator. It accepts
 autonomous mission, per-drone terminal target, and common wand modes. Use it
 through `cfswarmsim` before any hardware swarm test.
 
@@ -329,6 +345,12 @@ placement. Do not define the flight mission here.
 
 Two-model integration-test world. The models are named `cf1` and `cf2` so
 each controller can use its own velocity and odometry topics.
+
+### `src/cf_gazebo/worlds/crazyflie_five_swarm_world.sdf`
+
+Five-model integration-test world for `five_drone_lab`. The vehicles start on
+a square with `cf5` in the center, with more than the configured minimum
+separation between every pair.
 
 ### `src/cf_gazebo/models/crazyflie/model.sdf`
 
@@ -516,43 +538,52 @@ vehicles continue to publish `DISARMED`, `READY`, `FLYING`, and `LANDING`.
 
 ## Design or change a swarm sequence
 
-Edit `src/cf_control/cf_control/swarm_missions.py`. This is the main swarm
-choreography file; do not add formation waypoints to `swarm_node.py`.
+Create or edit a mission in
+`src/cf_control/cf_control/swarm_missions/`. Do not add formation waypoints to
+`swarm_node.py`.
 
 The bundled pattern is:
 
 ```python
-SWARM_MISSIONS = {
-    'two_drone_demo': [
-        {
-            'name': 'SPREAD',
-            'hold_s': 2.0,
-            'offsets': {
-                'cf1': (-0.15, 0.0, 0.35),
-                'cf2': (0.15, 0.0, 0.35),
-            },
+MISSION_NAME = 'two_drone_demo'
+
+MISSION = [
+    {
+        'name': 'SPREAD',
+        'hold_s': 2.0,
+        'offsets': {
+            'cf1': (-0.15, 0.0, 0.35),
+            'cf2': (0.15, 0.0, 0.35),
         },
-        # Add more phases here.
-    ],
-}
+    },
+    # Add more phases here.
+]
 ```
 
 Each offset is `(x, y, z)` in metres relative to that drone's own arming
 position. `hold_s` starts only after every drone is within the swarm position
 tolerance. Every phase must contain exactly the configured drone IDs.
 
+The mission and profile must agree exactly. For example,
+`five_drone_lab` selects `five_drone_demo`, whose every phase contains `cf1`
+through `cf5`.
+
 To add a mission:
 
-1. Add a new key and phase list to `SWARM_MISSIONS`.
-2. Keep every target inside each drone's external-command limits.
-3. Keep all simultaneous targets at least `SWARM_MIN_SEPARATION_M` apart.
-4. End at a stable, known formation; the coordinator lands automatically.
-5. Rebuild and select the name with `cfswarmsim gui YOUR_MISSION`.
-6. Run `cftest`, then the complete Gazebo mission, before hardware.
+1. Copy an existing mission file and give it a unique `MISSION_NAME`.
+2. Import its `MISSION_NAME` and `MISSION` in `swarm_missions/loader.py`, then
+   add the pair to `SWARM_MISSIONS`.
+3. Keep every target inside each drone's external-command limits.
+4. Keep all simultaneous targets at least `SWARM_MIN_SEPARATION_M` apart.
+5. End at a stable, known formation; the coordinator lands automatically.
+6. Rebuild and select it with
+   `cfswarmsim gui PROFILE_NAME YOUR_MISSION`.
+7. Run `cftest`, then the complete Gazebo mission, before hardware.
 
 Swarm safety tuning remains in `config.py`:
 
 ```python
+DEFAULT_SWARM_PROFILE = 'two_drone_lab'
 SWARM_POSITION_TOLERANCE_M = 0.07
 SWARM_MIN_SEPARATION_M = 0.25
 SWARM_TAKEOFF_TIMEOUT_S = 12.0
@@ -561,6 +592,34 @@ SWARM_MAX_FLIGHT_TIME_S = 90.0
 
 The separation check uses absolute targets after adding each drone's home
 position, so it also catches an unsafe physical starting layout.
+
+## Add or change swarm membership
+
+Create or edit a file in `src/cf_control/cf_control/swarm_profiles/`, not
+`swarm_node.py`.
+
+For every profile:
+
+1. Copy an existing profile file and give it a unique `PROFILE_NAME`.
+2. List each drone once in `drone_ids`.
+3. Provide exactly one absolute Vicon topic per ID.
+4. Provide exactly one separately addressable radio URI per hardware drone.
+5. Select a mission whose phase dictionaries contain exactly those IDs.
+6. Select a Gazebo world containing models with those same names.
+7. Import its `PROFILE_NAME` and `PROFILE` in `swarm_profiles/loader.py`, then
+   add the pair to `SWARM_PROFILES`.
+
+Test the bundled five-drone profile with:
+
+```bash
+cfbuild
+cftest
+cfswarmsim headless five_drone_lab
+```
+
+For hardware, first fill the blank `cf3`, `cf4`, and `cf5` radio URIs and
+verify every Vicon subject name. The launcher deliberately refuses to start
+if any profile radio URI remains blank.
 
 ## Change mission tuning without changing the sequence
 
@@ -599,13 +658,16 @@ cfsim headless
 
 ## Change the autonomous mission sequence
 
-Edit `src/cf_control/cf_control/crazyflie_mission.py`. The built-in names are
+Create or edit a file in
+`src/cf_control/cf_control/crazyflie_missions/`. The built-in names are
 `figure_eight`, `hover_test`, and `square_demo`.
 
-Create a waypoint mission by adding a key to `CRAZYFLIE_MISSIONS`:
+Create a waypoint mission file like this:
 
 ```python
-'my_mission': [
+MISSION_NAME = 'my_mission'
+
+MISSION = [
     {
         'name': 'FORWARD',
         'kind': 'waypoint',
@@ -618,8 +680,11 @@ Create a waypoint mission by adding a key to `CRAZYFLIE_MISSIONS`:
         'offset': (0.0, 0.0, 0.30),
         'hold_s': 1.0,
     },
-],
+]
 ```
+
+Then import its `MISSION_NAME` and `MISSION` in
+`crazyflie_missions/loader.py` and add the pair to `CRAZYFLIE_MISSIONS`.
 
 Offsets are `(x, y, z)` metres from the position recorded by `cfarm`.
 `hold_s` begins only after the drone reaches the waypoint and resets if it

@@ -5,6 +5,7 @@ from cf_control.config import (
     DEFAULT_SWARM_MISSION,
     SWARM_MAX_FLIGHT_TIME_S,
 )
+from cf_control.swarm_profiles import load_swarm_profile
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
@@ -24,6 +25,10 @@ def _optional_values(context, argument, drone_ids):
     return values or [''] * len(drone_ids)
 
 
+def _profile_values(profile, field):
+    return [profile[field][drone_id] for drone_id in profile['drone_ids']]
+
+
 def _build_nodes(context):
     mode = LaunchConfiguration('mode').perform(context).strip().lower()
     input_mode = LaunchConfiguration('input').perform(context).strip().lower()
@@ -33,7 +38,10 @@ def _build_nodes(context):
     requested_mission = LaunchConfiguration(
         'mission_name'
     ).perform(context).strip()
-    drone_ids = _comma_list(
+    profile_name = LaunchConfiguration(
+        'profile_name'
+    ).perform(context).strip()
+    requested_drone_ids = _comma_list(
         LaunchConfiguration('drone_ids').perform(context)
     )
 
@@ -43,8 +51,19 @@ def _build_nodes(context):
         raise ValueError('input must be autonomous, terminal, or wand')
     if positioning_source not in ('vicon', 'lighthouse'):
         raise ValueError('positioning_source must be vicon or lighthouse')
+    profile = None
+    if profile_name:
+        if mode != 'swarm':
+            raise ValueError('profile_name is only valid in swarm mode')
+        profile = load_swarm_profile(profile_name)
+        drone_ids = profile['drone_ids']
+    else:
+        drone_ids = requested_drone_ids or (
+            ['cf1'] if mode == 'single' else []
+        )
+
     if not drone_ids:
-        raise ValueError('drone_ids cannot be empty')
+        raise ValueError('swarm mode needs profile_name or drone_ids')
     if len(set(drone_ids)) != len(drone_ids):
         raise ValueError('drone_ids must be unique')
     if mode == 'single' and len(drone_ids) != 1:
@@ -52,14 +71,45 @@ def _build_nodes(context):
     if mode == 'swarm' and len(drone_ids) < 2:
         raise ValueError('swarm mode requires at least two drone_ids')
 
-    mission_name = requested_mission or (
-        DEFAULT_CRAZYFLIE_MISSION
-        if mode == 'single'
-        else DEFAULT_SWARM_MISSION
-    )
+    if requested_mission:
+        mission_name = requested_mission
+    elif profile is not None:
+        mission_name = profile['mission_name']
+    else:
+        mission_name = (
+            DEFAULT_CRAZYFLIE_MISSION
+            if mode == 'single'
+            else DEFAULT_SWARM_MISSION
+        )
 
-    vicon_topics = _optional_values(context, 'vicon_topics', drone_ids)
-    radio_uris = _optional_values(context, 'radio_uris', drone_ids)
+    requested_vicon_topics = _optional_values(
+        context,
+        'vicon_topics',
+        drone_ids,
+    )
+    requested_radio_uris = _optional_values(
+        context,
+        'radio_uris',
+        drone_ids,
+    )
+    vicon_topics = requested_vicon_topics
+    radio_uris = requested_radio_uris
+    if profile is not None:
+        if not any(vicon_topics):
+            vicon_topics = _profile_values(profile, 'vicon_topics')
+        if not any(radio_uris):
+            radio_uris = _profile_values(profile, 'radio_uris')
+        missing_uris = [
+            drone_id
+            for drone_id, uri in zip(drone_ids, radio_uris)
+            if not uri
+        ]
+        if missing_uris:
+            raise ValueError(
+                f'Profile {profile_name!r} is missing radio URIs for '
+                f'{missing_uris}; edit swarm_profiles/{profile_name}.py or '
+                'pass radio_uris'
+            )
     nodes = []
 
     for index, drone_id in enumerate(drone_ids):
@@ -133,8 +183,13 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'drone_ids',
-            default_value='cf1',
-            description='Comma-separated drone names',
+            default_value='',
+            description='Comma-separated drone names when not using a profile',
+        ),
+        DeclareLaunchArgument(
+            'profile_name',
+            default_value='',
+            description='Named roster from cf_control/swarm_profiles/',
         ),
         DeclareLaunchArgument(
             'positioning_source',
@@ -155,7 +210,7 @@ def generate_launch_description():
             'mission_name',
             default_value='',
             description=(
-                'Mission from crazyflie_mission.py or swarm_missions.py; '
+                'Mission from crazyflie_missions/ or swarm_missions/; '
                 'empty selects the appropriate default'
             ),
         ),

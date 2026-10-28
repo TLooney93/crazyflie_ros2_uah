@@ -21,6 +21,18 @@ def test_unknown_mission_is_rejected():
         load_swarm_mission('missing', ['cf1', 'cf2'])
 
 
+def test_five_drone_demo_loads_for_expected_drones():
+    """The five-drone profile should have a matching saved mission."""
+    drone_ids = ['cf1', 'cf2', 'cf3', 'cf4', 'cf5']
+    phases = load_swarm_mission('five_drone_demo', drone_ids)
+
+    assert [phase['name'] for phase in phases] == [
+        'HOVER',
+        'FORWARD',
+        'RETURN_HOME',
+    ]
+
+
 def test_mission_rejects_wrong_drone_set():
     """Mission definitions must specify every requested drone."""
     with pytest.raises(ValueError, match='must exactly match'):

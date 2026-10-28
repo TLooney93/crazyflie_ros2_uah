@@ -1,8 +1,8 @@
-"""Editable autonomous missions for one Crazyflie.
+"""
+Registry and validation for saved single-Crazyflie missions.
 
-All offsets are ``(x, y, z)`` in metres relative to the position recorded
-when the vehicle is armed. Waypoint hold time starts only after the vehicle
-is within the configured position tolerance.
+To register a mission, import its ``MISSION_NAME`` and ``MISSION`` below and
+add that pair to ``CRAZYFLIE_MISSIONS``.
 """
 
 import copy
@@ -12,75 +12,25 @@ from cf_control.config import (
     EXTERNAL_MAX_HEIGHT_M,
     EXTERNAL_MAX_HORIZONTAL_OFFSET_M,
     EXTERNAL_MIN_HEIGHT_M,
-    FLIGHT_TEST_FIGURE_EIGHT_DURATION_S,
-    FLIGHT_TEST_FIGURE_EIGHT_RADIUS_M,
-    FLIGHT_TEST_HEIGHT_M,
-    FLIGHT_TEST_HOVER_S,
+)
+from cf_control.crazyflie_missions.figure_eight import (
+    MISSION as FIGURE_EIGHT,
+    MISSION_NAME as FIGURE_EIGHT_NAME,
+)
+from cf_control.crazyflie_missions.hover_test import (
+    MISSION as HOVER_TEST,
+    MISSION_NAME as HOVER_TEST_NAME,
+)
+from cf_control.crazyflie_missions.square_demo import (
+    MISSION as SQUARE_DEMO,
+    MISSION_NAME as SQUARE_DEMO_NAME,
 )
 
 
 CRAZYFLIE_MISSIONS = {
-    'figure_eight': [
-        {
-            'name': 'HOVER',
-            'kind': 'waypoint',
-            'offset': (0.0, 0.0, FLIGHT_TEST_HEIGHT_M),
-            'hold_s': FLIGHT_TEST_HOVER_S,
-        },
-        {
-            'name': 'FIGURE_EIGHT',
-            'kind': 'figure_eight',
-            'center_offset': (0.0, 0.0, FLIGHT_TEST_HEIGHT_M),
-            'radius_m': FLIGHT_TEST_FIGURE_EIGHT_RADIUS_M,
-            'duration_s': FLIGHT_TEST_FIGURE_EIGHT_DURATION_S,
-        },
-        {
-            'name': 'RETURN_HOME',
-            'kind': 'waypoint',
-            'offset': (0.0, 0.0, FLIGHT_TEST_HEIGHT_M),
-            'hold_s': 0.0,
-        },
-    ],
-    'hover_test': [
-        {
-            'name': 'HOVER',
-            'kind': 'waypoint',
-            'offset': (0.0, 0.0, FLIGHT_TEST_HEIGHT_M),
-            'hold_s': 5.0,
-        },
-    ],
-    'square_demo': [
-        {
-            'name': 'INITIAL_HOVER',
-            'kind': 'waypoint',
-            'offset': (0.0, 0.0, FLIGHT_TEST_HEIGHT_M),
-            'hold_s': 2.0,
-        },
-        {
-            'name': 'SQUARE_1',
-            'kind': 'waypoint',
-            'offset': (0.20, 0.0, FLIGHT_TEST_HEIGHT_M),
-            'hold_s': 1.0,
-        },
-        {
-            'name': 'SQUARE_2',
-            'kind': 'waypoint',
-            'offset': (0.20, 0.20, FLIGHT_TEST_HEIGHT_M),
-            'hold_s': 1.0,
-        },
-        {
-            'name': 'SQUARE_3',
-            'kind': 'waypoint',
-            'offset': (0.0, 0.20, FLIGHT_TEST_HEIGHT_M),
-            'hold_s': 1.0,
-        },
-        {
-            'name': 'RETURN_HOME',
-            'kind': 'waypoint',
-            'offset': (0.0, 0.0, FLIGHT_TEST_HEIGHT_M),
-            'hold_s': 1.0,
-        },
-    ],
+    FIGURE_EIGHT_NAME: FIGURE_EIGHT,
+    HOVER_TEST_NAME: HOVER_TEST,
+    SQUARE_DEMO_NAME: SQUARE_DEMO,
 }
 
 

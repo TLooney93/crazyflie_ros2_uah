@@ -69,12 +69,12 @@ cfvicon 192.168.10.1 vicon
 | `cfsource` | none | Re-source `install/setup.bash` after an external build. |
 | `cfgazebo` | `[gui\|headless]` | Start only the Gazebo world. It does not start the bridge or controller. |
 | `cfsim` | `[gui\|headless] [autonomous\|terminal\|wand] [mission]` | Start the complete single-drone Gazebo stack in the selected mode. |
-| `cfswarmsim` | `[gui\|headless] [mission_name] [autonomous\|terminal\|wand]` | Start the two-drone Gazebo swarm and coordinator. |
+| `cfswarmsim` | `[gui\|headless] [profile] [mission] [autonomous\|terminal\|wand]` | Start the profile-selected Gazebo swarm. The mode may be omitted, so `cfswarmsim five_drone_lab` is valid. |
 | `cfrun` | `[drone_id] [vicon\|lighthouse] [vicon_topic] [wand_bool] [mission]` | Start the hardware Crazyflie node. Defaults to `cf1`, Vicon, wand off, and `figure_eight`. |
 | `cfsingle` | `[drone_id] [source] [vicon_topic] [radio_uri] [mission]` | Launch one hardware drone with a named autonomous mission. |
 | `cfterminal` | `[drone_id] [source] [vicon_topic] [radio_uri]` | Launch one hardware drone for bounded terminal position targets. |
 | `cfwandflight` | `[drone_id] [source] [vicon_topic] [radio_uri]` | Launch one hardware drone with guarded wand input. |
-| `cfswarm` | `ids source topics mission input radio_uris` | Launch the hardware swarm. Separate comma-delimited radio URIs are required. |
+| `cfswarm` | `[profile] [input] [source] [mission] [radio_uris] [vicon_topics]` | Launch a named hardware swarm profile. A comma-separated ID list as the first argument retains the explicit legacy form. |
 | `cfarm` | `[drone_id]` | Arm after valid position checks. Defaults to `cf1`. |
 | `cftakeoff` | `[drone_id]` | Start the autonomous mission selected when the node was launched. |
 | `cfland` | `[drone_id]` | Request a controlled landing or disarm before takeoff. |
@@ -108,9 +108,9 @@ are intentionally exclusive; do not switch sources while airborne.
 | Single | Named saved mission | `cfsim gui autonomous MISSION` | `cfsingle cf1 vicon TOPIC RADIO_URI MISSION` |
 | Single | Terminal target | `cfsim gui terminal` | `cfterminal cf1 vicon TOPIC` |
 | Single | Keyboard/physical wand | `cfsim gui wand` | `cfwandflight cf1 vicon TOPIC` |
-| Swarm | Saved formation mission | `cfswarmsim gui` | `cfswarm IDS vicon TOPICS MISSION autonomous RADIO_URIS` |
-| Swarm | Per-drone terminal targets | `cfswarmsim gui` | `cfswarm IDS vicon TOPICS MISSION terminal RADIO_URIS` |
-| Swarm | Common wand gestures | `cfswarmsim gui MISSION wand` | `cfswarm IDS vicon TOPICS MISSION wand RADIO_URIS` |
+| Swarm | Saved formation mission | `cfswarmsim gui PROFILE` | `cfswarm PROFILE autonomous vicon` |
+| Swarm | Per-drone terminal targets | `cfswarmsim gui PROFILE "" terminal` | `cfswarm PROFILE terminal vicon` |
+| Swarm | Common wand gestures | `cfswarmsim gui PROFILE "" wand` | `cfswarm PROFILE wand vicon` |
 
 `TOPIC` means the actual Vicon `PoseStamped` topic for that rigid body.
 `TOPICS` and `RADIO_URIS` are comma-separated lists in the same order as
@@ -178,8 +178,8 @@ cfsim headless
 
 Use `cfsim` without `headless` for the graphical window.
 
-The default is `figure_eight`. To run another mission defined in
-`crazyflie_mission.py`, append its name, for example:
+The default is `figure_eight`. To run another mission registered in
+`crazyflie_missions/loader.py`, append its name, for example:
 
 ```bash
 cfsim headless autonomous square_demo
@@ -362,14 +362,14 @@ move_backward
 hold
 ```
 
-## Test 7: Two-drone swarm mission in Gazebo
+## Test 7: Profile-selected swarm mission in Gazebo
 
 ### Terminal 1 - swarm simulator
 
 ```bash
 cfenv
 cfbuild
-cfswarmsim headless two_drone_demo
+cfswarmsim headless two_drone_lab
 ```
 
 ### Terminal 2 - coordinator state
@@ -393,7 +393,7 @@ IDLE -> ARMING -> ARM_SETTLE -> TAKEOFF -> HOVER -> MISSION
      -> LANDING -> IDLE
 ```
 
-The bundled mission logs `SPREAD`, `FORWARD`, and `RETURN_HOME`. At any time,
+The two-drone mission logs `SPREAD`, `FORWARD`, and `RETURN_HOME`. At any time,
 request a normal multi-drone landing or an emergency stop with:
 
 ```bash
@@ -406,7 +406,7 @@ cfswarmstop
 Start the simulator with common wand input:
 
 ```bash
-cfswarmsim headless two_drone_demo wand
+cfswarmsim headless two_drone_lab "" wand
 ```
 
 In a control terminal:
@@ -643,7 +643,17 @@ target. Finish with:
 land
 ```
 
-## Test 12: Hardware two-drone swarm with Vicon
+### Five-drone simulation variant
+
+Run the complete five-drone profile before configuring hardware:
+
+```bash
+cfswarmsim headless five_drone_lab
+```
+
+The expected phases are `HOVER`, `FORWARD`, and `RETURN_HOME`.
+
+## Test 12: Hardware swarm with Vicon
 
 Do not run this until Test 7 completes normally in Gazebo. Use one separately
 addressable Crazyradio per flying controller process. Replace the Vicon topic
@@ -660,10 +670,7 @@ cfvicon 192.168.10.1 vicon
 ```bash
 cfenv
 cfbuild
-cfswarm cf1,cf2 vicon \
-  /vicon/cf1/cf1,/vicon/cf2/cf2 \
-  two_drone_demo autonomous \
-  radio://0/80/2M/E7E7E7E7E7,radio://1/80/2M/E7E7E7E7E6
+cfswarm two_drone_lab autonomous vicon
 ```
 
 Wait for both Vicon-ready messages. Verify each position stream separately:
@@ -689,11 +696,12 @@ cfswarmmission
 cfswarmland
 ```
 
-For terminal-controlled swarm flight, change the fifth `cfswarm` argument to
-`terminal`, use the staged arm/takeoff calls, wait for `HOVER`, then send one
+For terminal-controlled swarm flight, use
+`cfswarm two_drone_lab terminal vicon`, then use the staged arm/takeoff calls,
+wait for `HOVER`, and send one
 bounded absolute target per drone with `cftarget`.
 
-For common wand control, change the fifth argument to `wand`. Arm with
+For common wand control, use `cfswarm two_drone_lab wand vicon`. Arm with
 `cfswarmarm`, wait for `WAND_READY`, then run `cfw` and enter `enable` and
 `takeoff`. Both drones receive the same bounded relative movement gestures,
 while the coordinator monitors position freshness, group separation, and

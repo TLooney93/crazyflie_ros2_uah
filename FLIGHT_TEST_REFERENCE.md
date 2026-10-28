@@ -383,7 +383,7 @@ separate terminal for emergencies.
 The selected sequence and its geometry are defined in:
 
 ```text
-src/cf_control/cf_control/crazyflie_mission.py
+src/cf_control/cf_control/crazyflie_missions/<mission_name>.py
 ```
 
 Controller gains and shared safety limits are defined in:

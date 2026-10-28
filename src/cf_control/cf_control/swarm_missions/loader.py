@@ -1,7 +1,9 @@
-"""Editable formation sequences for the swarm coordinator.
+"""
+Registry and validation for saved swarm missions.
 
-Offsets are in metres relative to each drone's position when it was armed.
-Every phase must provide one ``(x, y, z)`` offset per flying drone.
+Offsets are metres relative to each drone's position when it was armed. To
+register a mission, import its ``MISSION_NAME`` and ``MISSION`` below and add
+that pair to ``SWARM_MISSIONS``.
 """
 
 import math
@@ -11,35 +13,19 @@ from cf_control.config import (
     EXTERNAL_MAX_HORIZONTAL_OFFSET_M,
     EXTERNAL_MIN_HEIGHT_M,
 )
+from cf_control.swarm_missions.five_drone_demo import (
+    MISSION as FIVE_DRONE_DEMO,
+    MISSION_NAME as FIVE_DRONE_DEMO_NAME,
+)
+from cf_control.swarm_missions.two_drone_demo import (
+    MISSION as TWO_DRONE_DEMO,
+    MISSION_NAME as TWO_DRONE_DEMO_NAME,
+)
 
 
 SWARM_MISSIONS = {
-    'two_drone_demo': [
-        {
-            'name': 'SPREAD',
-            'hold_s': 2.0,
-            'offsets': {
-                'cf1': (-0.15, 0.0, 0.35),
-                'cf2': (0.15, 0.0, 0.35),
-            },
-        },
-        {
-            'name': 'FORWARD',
-            'hold_s': 2.0,
-            'offsets': {
-                'cf1': (-0.15, 0.30, 0.35),
-                'cf2': (0.15, 0.30, 0.35),
-            },
-        },
-        {
-            'name': 'RETURN_HOME',
-            'hold_s': 2.0,
-            'offsets': {
-                'cf1': (0.0, 0.0, 0.35),
-                'cf2': (0.0, 0.0, 0.35),
-            },
-        },
-    ],
+    TWO_DRONE_DEMO_NAME: TWO_DRONE_DEMO,
+    FIVE_DRONE_DEMO_NAME: FIVE_DRONE_DEMO,
 }
 
 

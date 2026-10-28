@@ -1,17 +1,6 @@
 import math
-import time
 from threading import Lock
-
-import cflib.crtp
-from cflib.crazyflie import Crazyflie
-from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
-from geometry_msgs.msg import Point, PoseStamped, Twist
-from nav_msgs.msg import Odometry
-import rclpy
-from rclpy.executors import ExternalShutdownException
-from rclpy.node import Node
-from std_msgs.msg import String
-from std_srvs.srv import Trigger
+import time
 
 from cf_control.config import (
     ARM_SETTLE_TIME_S,
@@ -44,16 +33,26 @@ from cf_control.config import (
     WAND_TILT_REPEAT_S,
     WAND_TILT_TRIGGER_DEG,
 )
-from cf_control.crazyflie_mission import load_crazyflie_mission
 from cf_control.crazyflie_interface import (
     CrazyflieInterface,
     SimulatedCrazyflieInterface,
 )
+from cf_control.crazyflie_missions import load_crazyflie_mission
 from cf_control.flight_controller import FlightController
 from cf_control.flight_state import FlightState
 from cf_control.lighthouse import LighthouseManager
 from cf_control.telemetry import TelemetryReader
 from cf_control.wand_control import tilt_to_unit_offset
+from cflib.crazyflie import Crazyflie
+from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
+import cflib.crtp
+from geometry_msgs.msg import Point, PoseStamped, Twist
+from nav_msgs.msg import Odometry
+import rclpy
+from rclpy.executors import ExternalShutdownException
+from rclpy.node import Node
+from std_msgs.msg import String
+from std_srvs.srv import Trigger
 
 
 class CrazyflieNode(Node):
@@ -123,11 +122,16 @@ class CrazyflieNode(Node):
                 'max_flight_time_s must be a positive finite number'
             )
 
-        if self.drone_id not in DRONES:
-            raise ValueError(f'Unknown drone name: {self.drone_id}')
-
         radio_uri = self.get_parameter('radio_uri').value
-        self.uri = radio_uri or DRONES[self.drone_id]
+        if (
+            not self.simulation
+            and not radio_uri
+            and self.drone_id not in DRONES
+        ):
+            raise ValueError(
+                f'Unknown drone name {self.drone_id!r}; provide radio_uri'
+            )
+        self.uri = radio_uri or DRONES.get(self.drone_id, '')
 
         self.scf = None
         self.lighthouse = None
