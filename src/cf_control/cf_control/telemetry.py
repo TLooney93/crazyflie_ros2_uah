@@ -71,6 +71,9 @@ class TelemetryReader:
         log_config.add_variable('stateEstimate.x', 'float')
         log_config.add_variable('stateEstimate.y', 'float')
         log_config.add_variable('stateEstimate.z', 'float')
+        log_config.add_variable('stabilizer.roll', 'float')
+        log_config.add_variable('stabilizer.pitch', 'float')
+        log_config.add_variable('stabilizer.yaw', 'float')
         self.scf.cf.log.add_config(log_config)
         log_config.data_received_cb.add_callback(self._on_log_data)
 

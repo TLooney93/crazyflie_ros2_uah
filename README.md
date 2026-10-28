@@ -1,38 +1,42 @@
-Undergrad Senior Design Project - CrazyConductors
-University of Alabama Huntsville EE dept Fall 2026
-Drone swarm software architecture using Crazyflie platform and LightHouse Positioning System
+# CrazyConductors ROS 2 control stack
 
-OBJECTIVE:
-Autonomous drone swarm commanded by wand gesture
+University of Alabama in Huntsville senior design project for commanding
+Crazyflie vehicles with a wand. Vicon is the external-position source; the
+older Lighthouse modules remain only as historical code and are not used by
+the active flight node.
 
-EXECUTION:
-Utilize Cflib (Python API used for intefacing with CF firmware) and ros2 to inteface multiple nodes,
-implement safety filter, and recognize and execute gesture commands.
+## Active software path
 
+1. `vicon_datastream_bridge` reads Tracker's official DataStream output and
+   maps `cf1` to `/vicon/cf1/pose` and `cf2` to `/wand/pose`.
+2. `crazyflie_node.py` validates that pose, sends it to the onboard Kalman
+   estimator, and publishes `/<drone_id>/position`.
+3. Takeoff is accepted only when actuation was explicitly enabled and Vicon
+   has supplied a stable startup window.
+4. `wand_button_node.py` or the keyboard `wand_node.py` publishes normalized
+   gestures on `/wand/gesture`.
+5. `wand_coordinator.py` maps gestures to guarded takeoff, landing,
+   emergency-stop, and bounded movement commands.
+6. `flight_controller.py` computes bounded world-frame velocity setpoints.
 
-CURRENT PYTHON ARCHITECTURE:
+The flight node defaults to `enable_actuation:=false`. Starting it cannot take
+off or send motor commands. Enable actuation only during a cleared, supervised
+flight test with an independent emergency-stop procedure.
 
-- `crazyflie_node.py`: owns one radio connection and its ROS 2 topics
-- `telemetry.py`: reads Lighthouse-backed position estimates from cflib
-- `flight_controller.py`: converts position error into bounded velocity
-- `crazyflie_interface.py`: provides cflib commander methods for future flight integration
-- `swarm_node.py`: future coordination layer for multiple drone nodes
-- `lighthouse.py`: validates Lighthouse input and estimator variance stability during startup
+## Important files
 
-Per-drone ROS 2 data flow:
+- `cf_control/config.py`: radio addresses and conservative control constants
+- `cf_control/crazyflie_interface.py`: small wrapper around cflib commands
+- `cf_control/crazyflie_node.py`: Vicon, state machine, services, watchdog
+- `cf_control/vicon.py`: pure pose validation and startup readiness logic
+- `cf_control/wand_coordinator.py`: gesture-to-flight bridge
+- `cf_control/wand_button_node.py`: reads custom firmware button log variables
+- `cf_control/flight_wand_node.py`: runs `cf1` and `cf2` through one shared
+  Crazyradio process (required when only one dongle is available)
+- `firmware/wand_buttons/`: Bitcraze app-layer button example
+- `src/vicon_datastream_bridge/`: official-SDK Vicon-to-ROS pose bridge
+- `scripts/run_vicon_bridge.sh`: one-command Jazzy bridge launcher
+- `test/`: software-only unit tests
 
-    /<drone_id>/target (geometry_msgs/Point)
-        -> FlightController
-        -> bounded world-frame velocity (requires fresh, valid position telemetry)
-        -> /<drone_id>/debug/velocity (geometry_msgs/Twist)
-
-    Crazyflie stateEstimate.{x,y,z}
-        -> TelemetryReader
-        -> /<drone_id>/position (geometry_msgs/Point)
-
-The node currently runs the controller in dry-run mode and does not send motion
-commands to the drone. Its diagnostic velocity is zero when no target exists or
-position telemetry is missing, invalid, or stale. Flight-state handling and
-takeoff/landing integration are still to be implemented. Configuration in
-`config.py` uses metres for position, metres per second for velocity, and degrees
-per second for yaw rate.
+See `output/pdf/crazyflie_vicon_operations_guide.pdf` for complete terminal,
+Vicon, flight-test, troubleshooting, and firmware instructions.

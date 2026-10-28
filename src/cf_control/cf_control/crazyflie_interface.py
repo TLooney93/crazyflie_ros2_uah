@@ -1,3 +1,6 @@
+import time
+
+
 class CrazyflieInterface:
     """A command interface for one Crazyflie using an existing connection."""
 
@@ -13,6 +16,55 @@ class CrazyflieInterface:
             value: Numeric value or numeric string to assign.
         """
         self.scf.cf.param.set_value(name, str(value))
+
+    def disable_lighthouse_streams(self):
+        """Disable legacy Lighthouse angle packets when Vicon is in use."""
+        self.set_parameter('locSrv.enLhAngleStream', 0)
+        self.set_parameter('locSrv.enLhMtchStm', 0)
+
+    def send_external_pose(self, position, quaternion):
+        """Forward a motion-capture pose to the onboard estimator."""
+        x, y, z = position
+        qx, qy, qz, qw = quaternion
+        self.scf.cf.extpos.send_extpose(x, y, z, qx, qy, qz, qw)
+
+    def reset_estimator(self):
+        """Reset the onboard Kalman state estimator."""
+        self.set_parameter('kalman.resetEstimation', 1)
+        time.sleep(0.1)
+        self.set_parameter('kalman.resetEstimation', 0)
+
+    def arm(self):
+        """Request that the Crazyflie arm its motors."""
+        self.scf.cf.supervisor.send_arming_request(True)
+
+    def disarm(self):
+        """Request that the Crazyflie disarm its motors."""
+        self.scf.cf.supervisor.send_arming_request(False)
+
+    def takeoff(self, height_m, duration_s):
+        """Take off vertically to an absolute height."""
+        self.scf.cf.high_level_commander.takeoff(
+            height_m,
+            duration_s,
+            yaw=None,
+        )
+
+    def land(self, height_m=0.0, duration_s=2.0):
+        """Land vertically at the requested height."""
+        self.scf.cf.high_level_commander.land(
+            height_m,
+            duration_s,
+            yaw=None,
+        )
+
+    def stop_high_level(self):
+        """Stop the high-level trajectory and turn off the motors."""
+        self.scf.cf.high_level_commander.stop()
+
+    def release_low_level_control(self):
+        """Tell firmware that low-level setpoints are no longer active."""
+        self.scf.cf.commander.send_notify_setpoint_stop()
 
     def send_velocity(self, vx, vy, vz, yaw_rate=0.0):
         """Send one velocity setpoint in the world coordinate frame.
