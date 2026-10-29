@@ -29,6 +29,20 @@ def gesture_action(value):
     return WAND_GESTURE_ACTIONS.get(gesture, gesture)
 
 
+class ButtonEdges:
+    """Convert sampled firmware button pulses into single events."""
+
+    def __init__(self):
+        self.previous = {}
+
+    def pressed(self, name, value):
+        """Return true only for a zero-to-one transition."""
+        current = bool(value)
+        was_pressed = self.previous.get(name, False)
+        self.previous[name] = current
+        return current and not was_pressed
+
+
 class PositionGestureRecognizer:
     """Recognize deliberate three-part gestures from tracked XYZ positions."""
 
@@ -59,6 +73,15 @@ class PositionGestureRecognizer:
         self.max_duration_s = max_duration_s
         self.cooldown_s = cooldown_s
         self.baseline_alpha = baseline_alpha
+        self.baseline = None
+        self.state = 'IDLE'
+        self.started_at = None
+        self.cooldown_until = 0.0
+        self.horizontal_direction = None
+        self.last_sample_at = None
+
+    def reset(self):
+        """Discard the baseline and any partially recognized gesture."""
         self.baseline = None
         self.state = 'IDLE'
         self.started_at = None

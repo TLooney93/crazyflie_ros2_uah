@@ -104,6 +104,13 @@ mode it takes off to `EXTERNAL_HOVER` and accepts bounded topic targets.
 Autonomous mode cannot be overwritten by topic commands. The public service
 state is separate from the internal mission phase.
 
+### `src/cf_control/cf_control/hardware_swarm_runner.py`
+
+Hosts all hardware `CrazyflieNode` instances in one Python process. This is
+required for CFLib's process-local `RadioManager` to multiplex multiple drone
+addresses through one Crazyradio. The runner does not replace `swarm_node`;
+it owns radio connections while `swarm_node` coordinates the mission.
+
 ### `src/cf_control/cf_control/flight_controller.py`
 
 Small proportional position controller.
@@ -214,11 +221,15 @@ for landing. Use `cfwandgesture [vicon_pose_topic]` to run it.
 Physical `cf2` wand reader.
 
 It opens its own cflib connection, reads `cf2` position and attitude, converts
-the attitude to a quaternion, and publishes `/wand/pose`. It also publishes
-the connection state once per second.
+the attitude to a quaternion, and publishes `/wand/pose`. With the custom wand
+firmware, it also converts `wand.enable`, `wand.disable`, and `wand.stop` log
+pulses into guarded ROS events and publishes connection/enabled state.
 
 Use a second Crazyradio if separate `cf1` and `cf2` processes cannot share the
 same dongle. Remove all props from the handheld wand.
+
+Prefer `cfbuttonwandflight` for a physical wand: it co-locates the flying
+controller and wand driver so CFLib shares one Crazyradio safely.
 
 ### `src/cf_control/cf_control/swarm_node.py`
 
@@ -271,6 +282,7 @@ commands:
 
 ```text
 crazyflie_node
+hardware_swarm_runner
 swarm_node
 wand_node
 wand_driver_node
@@ -297,8 +309,10 @@ ROS package-index marker. Do not put code in it.
 
 ### `src/cf_control/launch/control.launch.py`
 
-Hardware-mode selector. It creates one protected `crazyflie_node` per drone
-and adds `swarm_node` for multi-drone modes. Launch arguments select:
+Hardware-mode selector. Single-drone mode starts `crazyflie_node` directly.
+Swarm mode starts one `hardware_swarm_runner` containing all protected drone
+controllers and a separate `swarm_node` mission coordinator. Launch arguments
+select:
 
 ```text
 mode: single | swarm
@@ -558,15 +572,15 @@ Create or edit a mission in
 The bundled pattern is:
 
 ```python
-MISSION_NAME = 'two_drone_demo'
+MISSION_NAME = 'two_drone_lab'
 
 MISSION = [
     {
-        'name': 'SPREAD',
+        'name': 'INITIAL_HOVER',
         'hold_s': 2.0,
         'offsets': {
-            'cf1': (-0.15, 0.0, 0.35),
-            'cf2': (0.15, 0.0, 0.35),
+            'cf1': (0.0, 0.0, 0.40),
+            'cf2': (0.0, 0.0, 0.40),
         },
     },
     # Add more phases here.
@@ -597,9 +611,10 @@ Swarm safety tuning remains in `config.py`:
 
 ```python
 DEFAULT_SWARM_PROFILE = 'two_drone_lab'
+DEFAULT_SWARM_MISSION = 'two_drone_lab'
 SWARM_POSITION_TOLERANCE_M = 0.07
 SWARM_MIN_SEPARATION_M = 0.25
-SWARM_TAKEOFF_TIMEOUT_S = 12.0
+SWARM_TAKEOFF_TIMEOUT_S = 20.0
 SWARM_MAX_FLIGHT_TIME_S = 90.0
 ```
 

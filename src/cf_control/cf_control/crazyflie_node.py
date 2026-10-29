@@ -22,10 +22,13 @@ from cf_control.config import (
     MAX_VELOCITY,
     POSITION_KP,
     POSITION_TIMEOUT_S,
+    TAKEOFF_BOOST_END_HEIGHT_M,
+    TAKEOFF_BOOST_M_S,
     TELEMETRY_LOSS_DESCENT_S,
     TELEMETRY_PERIOD_MS,
     VALID_WAND_GESTURES,
     VICON_ESTIMATOR_MAX_ERROR_M,
+    VICON_FORWARD_RATE_HZ,
     WAND_GESTURE_TOPIC,
     WAND_MAX_HORIZONTAL_OFFSET_M,
     WAND_POSE_TOPIC,
@@ -38,9 +41,13 @@ from cf_control.crazyflie_interface import (
     SimulatedCrazyflieInterface,
 )
 from cf_control.crazyflie_missions import load_crazyflie_mission
-from cf_control.flight_controller import FlightController
+from cf_control.flight_controller import (
+    FlightController,
+    ground_effect_takeoff_boost,
+)
 from cf_control.flight_state import FlightState
 from cf_control.lighthouse import LighthouseManager
+from cf_control.sample_rate import SampleRateLimiter
 from cf_control.telemetry import TelemetryReader
 from cf_control.wand_control import gesture_action, tilt_to_unit_offset
 from cflib.crazyflie import Crazyflie
@@ -57,13 +64,20 @@ from std_srvs.srv import Trigger
 
 class CrazyflieNode(Node):
 
-    def __init__(self):
-        super().__init__('crazyflie_node')
+    def __init__(self, node_name='crazyflie_node', parameter_overrides=None):
+        super().__init__(
+            node_name,
+            parameter_overrides=parameter_overrides,
+        )
 
         self.declare_parameter('drone_id', 'cf1')
         self.declare_parameter('simulation', False)
         self.declare_parameter('positioning_source', 'vicon')
         self.declare_parameter('vicon_pose_topic', '')
+        self.declare_parameter(
+            'vicon_forward_rate_hz',
+            VICON_FORWARD_RATE_HZ,
+        )
         self.declare_parameter('wand_control_enabled', False)
         self.declare_parameter('wand_mission_gestures_enabled', True)
         self.declare_parameter(
@@ -99,6 +113,13 @@ class CrazyflieNode(Node):
         self.max_flight_time_s = float(
             self.get_parameter('max_flight_time_s').value
         )
+        self.vicon_forward_rate_hz = float(
+            self.get_parameter('vicon_forward_rate_hz').value
+        )
+        self.vicon_forward_limiter = SampleRateLimiter(
+            self.vicon_forward_rate_hz
+        )
+        self.position_publish_limiter = SampleRateLimiter(CONTROL_RATE_HZ)
 
         if self.positioning_source not in ('lighthouse', 'vicon'):
             raise ValueError(
@@ -150,12 +171,18 @@ class CrazyflieNode(Node):
 
         self.current_position = None
         self.position_received_at = None
+        self.estimator_position = None
+        self.estimator_position_received_at = None
+        self.estimator_samples = 0
         self.position_lock = Lock()
         self.vicon_received_at = None
         self.vicon_position = None
         self.vicon_initial_samples = 0
         self.vicon_post_reset_samples = 0
         self.vicon_estimator_reset = False
+        self.vicon_rate_window_started_at = time.monotonic()
+        self.vicon_raw_samples = 0
+        self.vicon_forwarded_samples = 0
 
         self.vicon_pose_sub = None
         if not self.simulation and self.positioning_source == 'vicon':
@@ -171,7 +198,9 @@ class CrazyflieNode(Node):
                 10,
             )
             self.get_logger().info(
-                f'Vicon positioning selected: {vicon_pose_topic}'
+                f'Vicon positioning selected: {vicon_pose_topic}; '
+                f'estimator forwarding limited to '
+                f'{self.vicon_forward_rate_hz:.1f} Hz'
             )
 
         self.flight_controller = FlightController(
@@ -406,19 +435,20 @@ class CrazyflieNode(Node):
                 'Cannot arm without fresh position telemetry'
             )
 
-        if (
-            self.positioning_source == 'vicon'
-            and not self.simulation
-            and (
-                self.vicon_position is None
-                or math.dist(position, self.vicon_position)
-                > VICON_ESTIMATOR_MAX_ERROR_M
-            )
-        ):
-            return self._service_failure(
-                response,
-                'Cannot arm: fused position does not agree with Vicon'
-            )
+        if self.positioning_source == 'vicon' and not self.simulation:
+            estimator_position = self._fresh_estimator_position()
+            if estimator_position is None:
+                return self._service_failure(
+                    response,
+                    'Cannot arm without fresh onboard estimator telemetry'
+                )
+            if math.dist(estimator_position, position) > (
+                VICON_ESTIMATOR_MAX_ERROR_M
+            ):
+                return self._service_failure(
+                    response,
+                    'Cannot arm: fused position does not agree with Vicon'
+                )
 
         self.home_position = position
         self.flight_controller.clear_target()
@@ -508,6 +538,12 @@ class CrazyflieNode(Node):
             return
 
         action = gesture_action(gesture)
+
+        if action == 'emergency_stop':
+            response = type('Response', (), {})()
+            self.emergency_stop_callback(None, response)
+            self.get_logger().error('Emergency stop received from wand button')
+            return
 
         if action == 'land':
             if self.flight_state in (FlightState.READY, FlightState.FLYING):
@@ -755,9 +791,25 @@ class CrazyflieNode(Node):
             self.get_logger().warning('Ignoring non-finite Vicon position')
             return
 
-        self.interface.send_external_position(*position)
+        received_at = time.monotonic()
         self.vicon_position = position
-        self.vicon_received_at = time.monotonic()
+        self.vicon_received_at = received_at
+        self.vicon_raw_samples += 1
+
+        # In Vicon mode the camera measurement is the authoritative position
+        # for the ROS outer loop and swarm safety checks. The onboard Kalman
+        # estimate remains available separately for preflight validation.
+        self._store_position(position, received_at)
+
+        should_forward = self.vicon_forward_limiter.accept(received_at)
+        if should_forward:
+            self.interface.send_external_position(*position)
+            self.vicon_forwarded_samples += 1
+
+        self._report_vicon_rates(received_at)
+
+        if not should_forward:
+            return
 
         if not self.vicon_estimator_reset:
             self.vicon_initial_samples += 1
@@ -776,6 +828,33 @@ class CrazyflieNode(Node):
                     'Vicon positioning is ready for arming'
                 )
 
+    def _report_vicon_rates(self, received_at):
+        """Periodically report ROS input and radio-forwarding rates."""
+        elapsed = received_at - self.vicon_rate_window_started_at
+        if elapsed < 5.0:
+            return
+
+        raw_rate = self.vicon_raw_samples / elapsed
+        forward_rate = self.vicon_forwarded_samples / elapsed
+        with self.position_lock:
+            estimator_rate = self.estimator_samples / elapsed
+            estimator_received_at = self.estimator_position_received_at
+            self.estimator_samples = 0
+        estimator_age = (
+            received_at - estimator_received_at
+            if estimator_received_at is not None
+            else float('inf')
+        )
+        self.get_logger().info(
+            f'Vicon rates: input {raw_rate:.1f} Hz, '
+            f'forwarded {forward_rate:.1f} Hz; '
+            f'estimator telemetry {estimator_rate:.1f} Hz, '
+            f'age {estimator_age:.2f} s'
+        )
+        self.vicon_rate_window_started_at = received_at
+        self.vicon_raw_samples = 0
+        self.vicon_forwarded_samples = 0
+
     def _on_position(self, data, received_at):
         position = (
             float(data['stateEstimate.x']),
@@ -783,7 +862,17 @@ class CrazyflieNode(Node):
             float(data['stateEstimate.z'])
         )
 
-        self._store_position(position, received_at)
+        valid = all(math.isfinite(value) for value in position)
+        with self.position_lock:
+            self.estimator_position = position if valid else None
+            self.estimator_position_received_at = (
+                received_at if valid else None
+            )
+            if valid:
+                self.estimator_samples += 1
+
+        if self.simulation or self.positioning_source != 'vicon':
+            self._store_position(position, received_at)
 
     def _on_sim_odometry(self, msg):
         position = (
@@ -800,7 +889,11 @@ class CrazyflieNode(Node):
             self.current_position = position if valid else None
             self.position_received_at = received_at if valid else None
 
-        if not valid or not self.context.ok():
+        if (
+            not valid
+            or not self.context.ok()
+            or not self.position_publish_limiter.accept(received_at)
+        ):
             return
 
         msg = Point()
@@ -847,7 +940,7 @@ class CrazyflieNode(Node):
                 self.test_feedforward = (0.0, 0.0, 0.0)
                 self._set_state(FlightState.LANDING)
                 self.get_logger().error(
-                    'Position telemetry lost; beginning blind vertical descent'
+                    'Position source lost; beginning blind vertical descent'
                 )
 
             if now - self.telemetry_lost_at < TELEMETRY_LOSS_DESCENT_S:
@@ -875,6 +968,20 @@ class CrazyflieNode(Node):
         vx += self.test_feedforward[0]
         vy += self.test_feedforward[1]
         vz += self.test_feedforward[2]
+        if (
+            self.flight_state is FlightState.FLYING
+            and self.test_phase in (
+                'TAKEOFF',
+                'EXTERNAL_TAKEOFF',
+                'WAND_TAKEOFF',
+            )
+        ):
+            height_above_floor_m = position[2] - self.home_position[2]
+            vz += ground_effect_takeoff_boost(
+                height_above_floor_m,
+                TAKEOFF_BOOST_END_HEIGHT_M,
+                TAKEOFF_BOOST_M_S,
+            )
         vx = max(-MAX_VELOCITY, min(vx, MAX_VELOCITY))
         vy = max(-MAX_VELOCITY, min(vy, MAX_VELOCITY))
         vz = max(-MAX_VELOCITY, min(vz, MAX_VELOCITY))
@@ -1013,6 +1120,20 @@ class CrazyflieNode(Node):
         with self.position_lock:
             position = self.current_position
             received_at = self.position_received_at
+
+        if (
+            position is None
+            or received_at is None
+            or time.monotonic() - received_at > POSITION_TIMEOUT_S
+        ):
+            return None
+        return position
+
+    def _fresh_estimator_position(self):
+        """Return recent onboard stateEstimate data for preflight checks."""
+        with self.position_lock:
+            position = self.estimator_position
+            received_at = self.estimator_position_received_at
 
         if (
             position is None

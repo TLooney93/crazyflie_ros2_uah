@@ -1,5 +1,6 @@
 """Tests for named swarm vehicle rosters."""
 
+from cf_control.swarm_missions import load_swarm_mission
 from cf_control.swarm_profiles import load_swarm_profile
 import pytest
 
@@ -12,7 +13,20 @@ def test_two_drone_profile_is_hardware_complete():
     )
 
     assert profile['drone_ids'] == ['cf1', 'cf2']
-    assert profile['mission_name'] == 'two_drone_demo'
+    assert profile['mission_name'] == 'two_drone_lab'
+    assert profile['vicon_topics'] == {
+        'cf1': '/vicon/cf1/cf1',
+        'cf2': '/vicon/cf2/cf2',
+    }
+    assert profile['radio_uris']['cf1'].startswith('radio://0/')
+    assert profile['radio_uris']['cf2'].startswith('radio://0/')
+    assert profile['radio_uris']['cf1'] != profile['radio_uris']['cf2']
+    mission = load_swarm_mission(
+        profile['mission_name'],
+        profile['drone_ids'],
+    )
+    assert any(phase['name'] == 'VERTICAL_STACK' for phase in mission)
+    assert any(phase['name'].startswith('ORBIT_') for phase in mission)
 
 
 def test_five_drone_profile_is_available_for_simulation():

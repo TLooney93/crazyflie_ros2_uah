@@ -8,14 +8,13 @@ PROFILE_NAME = 'two_drone_lab'
 PROFILE = {
     'drone_ids': ('cf1', 'cf2'),
     'vicon_topics': {
-        'cf1': '/vicon/cf231/cf231',
+        'cf1': '/vicon/cf1/cf1',
         'cf2': '/vicon/cf2/cf2',
     },
     'radio_uris': {
         'cf1': DRONES['cf1'],
-        # The second process normally needs a second Crazyradio.
-        'cf2': 'radio://1/80/2M/E7E7E7E7E6',
+        'cf2': DRONES['cf2'],
     },
-    'mission_name': 'two_drone_demo',
+    'mission_name': 'two_drone_lab',
     'simulation_world': 'crazyflie_swarm_world.sdf',
 }

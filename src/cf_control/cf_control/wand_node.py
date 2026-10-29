@@ -75,7 +75,7 @@ class WandNode(Node):
 
         if gesture == 'enable':
             self.enabled = True
-        elif gesture == 'disable':
+        elif gesture in ('disable', 'emergency_stop'):
             self.enabled = False
         elif gesture.startswith('move_'):
             if not self.enabled:

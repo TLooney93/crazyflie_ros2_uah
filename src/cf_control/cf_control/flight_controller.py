@@ -1,3 +1,14 @@
+def ground_effect_takeoff_boost(
+    height_above_floor_m,
+    boost_end_height_m,
+    boost_m_s,
+):
+    """Return a bounded vertical boost while the vehicle is near the floor."""
+    if height_above_floor_m < boost_end_height_m:
+        return boost_m_s
+    return 0.0
+
+
 class FlightController:
 
     def __init__(self, kp, max_velocity):

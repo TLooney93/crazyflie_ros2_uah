@@ -315,7 +315,7 @@ PROFILE = {
     },
     'radio_uris': {
         'cf1': DRONES['cf1'],
-        'cf2': 'radio://1/80/2M/E7E7E7E7E6',
+        'cf2': DRONES['cf2'],
     },
     'mission_name': 'my_swarm_demo',
     'simulation_world': 'my_swarm_world.sdf',

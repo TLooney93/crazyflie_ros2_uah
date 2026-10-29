@@ -1,9 +1,22 @@
 import unittest
 
-from cf_control.flight_controller import FlightController
+from cf_control.flight_controller import (
+    FlightController,
+    ground_effect_takeoff_boost,
+)
 
 
 class FlightControllerTest(unittest.TestCase):
+
+    def test_ground_effect_boost_only_applies_below_cutoff(self):
+        self.assertEqual(
+            ground_effect_takeoff_boost(0.05, 0.15, 0.08),
+            0.08,
+        )
+        self.assertEqual(
+            ground_effect_takeoff_boost(0.15, 0.15, 0.08),
+            0.0,
+        )
 
     def test_no_target_produces_zero_velocity(self):
         controller = FlightController(kp=0.5, max_velocity=0.3)

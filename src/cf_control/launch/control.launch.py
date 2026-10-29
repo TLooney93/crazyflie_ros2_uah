@@ -4,6 +4,7 @@ from cf_control.config import (
     DEFAULT_CRAZYFLIE_MISSION,
     DEFAULT_SWARM_MISSION,
     SWARM_MAX_FLIGHT_TIME_S,
+    VICON_FORWARD_RATE_HZ,
 )
 from cf_control.swarm_profiles import load_swarm_profile
 from launch import LaunchDescription
@@ -43,6 +44,14 @@ def _build_nodes(context):
     ).perform(context).strip()
     requested_drone_ids = _comma_list(
         LaunchConfiguration('drone_ids').perform(context)
+    )
+    physical_wand_enabled = LaunchConfiguration(
+        'physical_wand_enabled'
+    ).perform(context).strip().lower() in ('1', 'true', 'yes', 'on')
+    wand_id = LaunchConfiguration('wand_id').perform(context).strip()
+    wand_uri = LaunchConfiguration('wand_uri').perform(context).strip()
+    vicon_forward_rate_hz = float(
+        LaunchConfiguration('vicon_forward_rate_hz').perform(context)
     )
 
     if mode not in ('single', 'swarm'):
@@ -111,21 +120,60 @@ def _build_nodes(context):
                 'pass radio_uris'
             )
     nodes = []
+    wand_enabled = input_mode == 'wand'
+    external_enabled = input_mode == 'terminal' or (
+        mode == 'swarm' and not wand_enabled
+    )
+    flight_mode = (
+        'external'
+        if external_enabled or wand_enabled
+        else 'autonomous'
+    )
 
-    for index, drone_id in enumerate(drone_ids):
-        wand_enabled = input_mode == 'wand'
-        external_enabled = input_mode == 'terminal' or (
-            mode == 'swarm' and not wand_enabled
+    use_shared_runner = mode == 'swarm' or (
+        mode == 'single'
+        and input_mode == 'wand'
+        and physical_wand_enabled
+    )
+    if use_shared_runner:
+        nodes.append(
+            Node(
+                package='cf_control',
+                executable='hardware_swarm_runner',
+                parameters=[{
+                    'drone_ids': drone_ids,
+                    'vicon_topics': vicon_topics,
+                    'radio_uris': radio_uris,
+                    'positioning_source': positioning_source,
+                    'vicon_forward_rate_hz': vicon_forward_rate_hz,
+                    'wand_control_enabled': wand_enabled,
+                    'wand_mission_gestures_enabled': mode == 'single',
+                    'external_targets_enabled': external_enabled,
+                    'flight_mode': flight_mode,
+                    'max_flight_time_s': (
+                        SWARM_MAX_FLIGHT_TIME_S
+                        if mode == 'swarm'
+                        else 35.0
+                    ),
+                    'mission_name': (
+                        mission_name
+                        if mode == 'single'
+                        else DEFAULT_CRAZYFLIE_MISSION
+                    ),
+                    'physical_wand_enabled': physical_wand_enabled,
+                    'wand_id': wand_id,
+                    'wand_uri': wand_uri,
+                }],
+                output='screen',
+            )
         )
-        flight_mode = (
-            'external'
-            if external_enabled or wand_enabled
-            else 'autonomous'
-        )
+    else:
+        drone_id = drone_ids[0]
         parameters = {
             'drone_id': drone_id,
             'simulation': False,
             'positioning_source': positioning_source,
+            'vicon_forward_rate_hz': vicon_forward_rate_hz,
             'wand_control_enabled': wand_enabled,
             'wand_mission_gestures_enabled': mode == 'single',
             'external_targets_enabled': external_enabled,
@@ -136,10 +184,10 @@ def _build_nodes(context):
         }
         if mode == 'single':
             parameters['mission_name'] = mission_name
-        if vicon_topics[index]:
-            parameters['vicon_pose_topic'] = vicon_topics[index]
-        if radio_uris[index]:
-            parameters['radio_uri'] = radio_uris[index]
+        if vicon_topics[0]:
+            parameters['vicon_pose_topic'] = vicon_topics[0]
+        if radio_uris[0]:
+            parameters['radio_uri'] = radio_uris[0]
 
         nodes.append(
             Node(
@@ -203,6 +251,11 @@ def generate_launch_description():
             description='Comma-separated pose topics, one per drone',
         ),
         DeclareLaunchArgument(
+            'vicon_forward_rate_hz',
+            default_value=str(VICON_FORWARD_RATE_HZ),
+            description='Maximum external-position radio updates per drone',
+        ),
+        DeclareLaunchArgument(
             'radio_uris',
             default_value='',
             description='Optional comma-separated radio URI overrides',
@@ -214,6 +267,21 @@ def generate_launch_description():
                 'Mission from crazyflie_missions/ or swarm_missions/; '
                 'empty selects the appropriate default'
             ),
+        ),
+        DeclareLaunchArgument(
+            'physical_wand_enabled',
+            default_value='false',
+            description='Share this process with a physical button wand',
+        ),
+        DeclareLaunchArgument(
+            'wand_id',
+            default_value='cf2',
+            description='Configured ID of the physical propeller-free wand',
+        ),
+        DeclareLaunchArgument(
+            'wand_uri',
+            default_value='',
+            description='Optional physical wand radio URI override',
         ),
         OpaqueFunction(function=_build_nodes),
     ])

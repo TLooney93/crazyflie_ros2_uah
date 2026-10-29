@@ -1,10 +1,11 @@
 import unittest
-from unittest.mock import Mock, call
+from unittest.mock import call, Mock
 
 from cf_control.crazyflie_interface import (
     CrazyflieInterface,
     SimulatedCrazyflieInterface,
 )
+from cf_control.sample_rate import SampleRateLimiter
 
 
 class CrazyflieInterfaceTest(unittest.TestCase):
@@ -86,6 +87,22 @@ class SimulatedCrazyflieInterfaceTest(unittest.TestCase):
 
         callback.assert_called_once_with(0.0, 0.0, 0.0, 0.0)
         self.assertFalse(interface.armed)
+
+
+class SampleRateLimiterTest(unittest.TestCase):
+
+    def test_accepts_only_one_sample_per_period(self):
+        limiter = SampleRateLimiter(10.0)
+
+        self.assertTrue(limiter.accept(0.0))
+        self.assertFalse(limiter.accept(0.05))
+        self.assertTrue(limiter.accept(0.10))
+
+    def test_rejects_invalid_rate(self):
+        for rate_hz in (0.0, -1.0, float('inf'), float('nan')):
+            with self.subTest(rate_hz=rate_hz):
+                with self.assertRaises(ValueError):
+                    SampleRateLimiter(rate_hz)
 
 
 if __name__ == '__main__':

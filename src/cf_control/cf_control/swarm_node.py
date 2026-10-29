@@ -1,5 +1,8 @@
 """ROS 2 coordinator for guarded multi-Crazyflie missions."""
 
+import math
+import time
+
 from cf_control.config import (
     ARM_SETTLE_TIME_S,
     DEFAULT_SWARM_MISSION,
@@ -12,13 +15,11 @@ from cf_control.config import (
 )
 from cf_control.swarm_missions import load_swarm_mission
 from geometry_msgs.msg import Point
-import math
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
-import time
 
 
 class SwarmNode(Node):
@@ -295,7 +296,10 @@ class SwarmNode(Node):
 
         if self.swarm_state == 'TAKEOFF':
             if now - self.action_started_at > SWARM_TAKEOFF_TIMEOUT_S:
-                self._safety_land('Swarm takeoff timed out')
+                self._safety_land(
+                    'Swarm takeoff timed out: '
+                    + self._takeoff_progress_summary()
+                )
                 return
             if self._all_at_takeoff_height():
                 self._set_state('HOVER')
@@ -425,6 +429,20 @@ class SwarmNode(Node):
             ) <= SWARM_POSITION_TOLERANCE_M
             for drone_id in self.drone_ids
         )
+
+    def _takeoff_progress_summary(self):
+        """Describe each member's measured height when takeoff times out."""
+        progress = []
+        for drone_id in self.drone_ids:
+            position = self.positions.get(drone_id)
+            home = self.home_positions.get(drone_id)
+            if position is None or home is None:
+                height = 'unknown'
+            else:
+                height = f'{position[2] - home[2]:.2f} m'
+            state = self.drone_states.get(drone_id, 'unknown')
+            progress.append(f'{drone_id}={height}, state={state}')
+        return '; '.join(progress)
 
     def _begin_mission(self):
         self.phase_index = 0

@@ -53,7 +53,7 @@ On the Vicon computer:
 3. Open the calibrated tracking session.
 4. Confirm all required cameras are connected and contributing.
 5. Confirm the Crazyflie rigid body is detected as subject and segment
-   `cf231`.
+   `cf1`.
 6. Enable the Vicon DataStream server.
 7. Leave Tracker running throughout the flight.
 
@@ -326,26 +326,23 @@ commands. `move_forward` and `move_backward` change world X;
 `move_left` and `move_right` change world Y. Each command moves the target by
 0.05 m. Horizontal targets are clamped to 0.50 m from the recorded arm point.
 
-### Physical cf2 wand
+### Physical cf2 button wand
 
-The teammate implementation uses `cf2` as the physical wand. It publishes
-position and attitude on `/wand/pose`. Start it in its own terminal:
+The physical `cf2` wand publishes position, attitude, and button events. Wire
+normally-open momentary switches from `DECK_GPIO_IO1` to GND for enable and
+from `DECK_GPIO_IO2` to GND for emergency stop. Both pins use firmware
+`INPUT_PULLUP`; do not connect them to a supply rail.
 
 Remove all propellers from `cf2` before using it as a handheld wand. The
 driver only reads telemetry, but a propeller-free wand prevents an unexpected
 firmware or operator command from becoming a handheld motor hazard.
 
+Start the flying drone and wand together so CFLib multiplexes both addresses
+through one Crazyradio:
+
 ```bash
 cfenv
-cfwanddriver cf2
-```
-
-If cf1 and cf2 cannot share one Crazyradio across the two processes, connect a
-second Crazyradio and pass its URI explicitly. For example, when the second
-radio is index 1:
-
-```bash
-cfwanddriver cf2 radio://1/80/2M/E7E7E7E7E6
+cfbuttonwandflight cf1 vicon /vicon/cf1/cf1 "" hover_test cf2
 ```
 
 Verify the stream before flight:
@@ -353,6 +350,8 @@ Verify the stream before flight:
 ```bash
 ros2 topic hz /wand/pose
 ros2 topic echo /wand/connected
+ros2 topic echo /wand/enabled
+ros2 topic echo /wand/gesture
 ```
 
 Use another terminal for the guarded command source:
@@ -362,17 +361,19 @@ cfenv
 cfw
 ```
 
-The hardware sequence is:
+The button-controlled hardware sequence is:
 
-1. Start Vicon and the cf1 node with wand control enabled.
-2. Start `cfwanddriver cf2` and verify `/wand/pose` is updating.
+1. Start Vicon and `cfbuttonwandflight`.
+2. Verify `/wand/pose`, `/wand/connected`, and the button topics.
 3. Hold cf2 level, run `cfarm cf1`, and wait at least one second.
-4. Enter `enable`; this records the wand's neutral attitude and heading.
-5. Enter `takeoff` and wait for `WAND_HOVER`.
+4. Hold IO1; this enables recognition and records neutral attitude.
+5. Complete the up/down gesture while holding IO1, then wait for
+   `WAND_HOVER`.
 6. Tilt the wand more than 20 degrees to move. Forward/back tilt commands the
    calibrated heading; left/right roll commands its perpendicular direction.
 7. Return the wand to neutral to hold the current target.
-8. Enter `land` for a controlled landing.
+8. Complete the down/up gesture for a controlled landing.
+9. Press IO2 at any time for immediate stop and disarm.
 
 While a tilt is held, the target advances by 0.05 m every 0.25 seconds. Enter
 `disable` to stop accepting wand movement and hold the current position. Enter
@@ -386,7 +387,7 @@ its actual subject and segment topic:
 
 ```bash
 cfenv
-cfwandgesture /vicon/wand/wand
+cfwandgesture /vicon/cfw/cfw
 ```
 
 The initial test mappings are:
@@ -399,8 +400,9 @@ down then back to baseline            -> land
 
 Vertical and horizontal travel must reach 0.15 m. Gestures must complete
 within two seconds and have a two-second cooldown. The drone must still be
-armed from the terminal, and wand actions must first be enabled with `cfw` or
-a one-shot `enable` message. Mission gestures are enabled only for a
+armed from the terminal. Hold the IO1 enable button for physical-wand gesture
+recognition, or use `cfw`/a one-shot `enable` message during keyboard tests.
+Mission gestures are enabled only for a
 single-drone launch during this initial test implementation.
 
 ## Mission parameters
@@ -491,6 +493,21 @@ Confirm:
 The node automatically enters its telemetry-loss descent and stops after the
 configured timeout. Keep the flight volume clear and investigate both the
 Vicon stream and Crazyflie radio link before attempting another flight.
+
+Compare raw Vicon input with fused estimator telemetry:
+
+```bash
+ros2 topic hz /vicon/cf1/cf1
+ros2 topic hz /cf1/position
+```
+
+If raw Vicon remains near 100 Hz while `/cf1/position` or `/cf2/position`
+stops, the failure is on the shared radio/telemetry path rather than the Vicon
+camera stream. In Vicon mode, the camera measurement is the authoritative ROS
+control and safety position; `stateEstimate` is retained as a preflight
+agreement check. Hardware control limits external-position forwarding to 10 Hz
+per drone by default and logs both rates every five seconds. Do not increase
+the stale-position timeout to hide this condition.
 
 ### Shell command is missing
 

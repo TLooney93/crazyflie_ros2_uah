@@ -3,6 +3,7 @@
 import time
 
 from cf_control.config import (
+    WAND_ENABLED_TOPIC,
     WAND_GESTURE_BASELINE_ALPHA,
     WAND_GESTURE_COOLDOWN_S,
     WAND_GESTURE_HORIZONTAL_TRAVEL_M,
@@ -17,7 +18,7 @@ from geometry_msgs.msg import PoseStamped
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 
 
 class WandGestureNode(Node):
@@ -70,6 +71,19 @@ class WandGestureNode(Node):
             WAND_GESTURE_TOPIC,
             10,
         )
+        self.enabled = False
+        self.enabled_sub = self.create_subscription(
+            Bool,
+            WAND_ENABLED_TOPIC,
+            self._on_enabled,
+            10,
+        )
+        self.control_sub = self.create_subscription(
+            String,
+            WAND_GESTURE_TOPIC,
+            self._on_control,
+            10,
+        )
         self.pose_sub = self.create_subscription(
             PoseStamped,
             pose_topic,
@@ -77,10 +91,33 @@ class WandGestureNode(Node):
             10,
         )
         self.get_logger().info(
-            f'Recognizing Vicon wand gestures from {pose_topic}'
+            f'Recognizing Vicon wand gestures from {pose_topic}; '
+            'disabled until the enable button is held'
         )
 
+    def _set_enabled(self, enabled):
+        """Apply the gesture-recognition gate and clear partial motion."""
+        enabled = bool(enabled)
+        if enabled == self.enabled:
+            return
+        self.enabled = enabled
+        self.recognizer.reset()
+        state = 'enabled' if enabled else 'disabled'
+        self.get_logger().info(f'Wand gesture recognition {state}')
+
+    def _on_enabled(self, message):
+        self._set_enabled(message.data)
+
+    def _on_control(self, message):
+        control = message.data.strip().lower().replace(' ', '_')
+        if control == 'enable':
+            self._set_enabled(True)
+        elif control in ('disable', 'emergency_stop'):
+            self._set_enabled(False)
+
     def _on_pose(self, message):
+        if not self.enabled:
+            return
         position = (
             message.pose.position.x,
             message.pose.position.y,

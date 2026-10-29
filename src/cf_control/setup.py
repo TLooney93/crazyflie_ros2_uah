@@ -49,6 +49,7 @@ setup(
     entry_points={
         'console_scripts': [
           'crazyflie_node = cf_control.crazyflie_node:main',
+          'hardware_swarm_runner = cf_control.hardware_swarm_runner:main',
           'swarm_node = cf_control.swarm_node:main',
           'wand_node = cf_control.wand_node:main',
           'wand_driver_node = cf_control.wand_driver_node:main',

@@ -21,9 +21,14 @@ from cf_control.swarm_missions.two_drone_demo import (
     MISSION as TWO_DRONE_DEMO,
     MISSION_NAME as TWO_DRONE_DEMO_NAME,
 )
+from cf_control.swarm_missions.two_drone_lab import (
+    MISSION as TWO_DRONE_LAB,
+    MISSION_NAME as TWO_DRONE_LAB_NAME,
+)
 
 
 SWARM_MISSIONS = {
+    TWO_DRONE_LAB_NAME: TWO_DRONE_LAB,
     TWO_DRONE_DEMO_NAME: TWO_DRONE_DEMO,
     FIVE_DRONE_DEMO_NAME: FIVE_DRONE_DEMO,
 }

@@ -74,6 +74,7 @@ cfvicon 192.168.10.1 vicon
 | `cfsingle` | `[drone_id] [source] [vicon_topic] [radio_uri] [mission]` | Launch one hardware drone with a named autonomous mission. |
 | `cfterminal` | `[drone_id] [source] [vicon_topic] [radio_uri]` | Launch one hardware drone for bounded terminal position targets. |
 | `cfwandflight` | `[drone_id] [source] [vicon_topic] [radio_uri] [mission]` | Launch one hardware drone with guarded wand input and a selectable gesture-started mission. |
+| `cfbuttonwandflight` | `[drone_id] [source] [vicon_topic] [radio_uri] [mission] [wand_id] [wand_uri]` | Launch one drone and a physical button wand in the same process so they share one Crazyradio. |
 | `cfswarm` | `[profile] [input] [source] [mission] [radio_uris] [vicon_topics]` | Launch a named hardware swarm profile. A comma-separated ID list as the first argument retains the explicit legacy form. |
 | `cfarm` | `[drone_id]` | Arm after valid position checks. Defaults to `cf1`. |
 | `cftakeoff` | `[drone_id]` | Start the autonomous mission selected when the node was launched. |
@@ -85,7 +86,7 @@ cfvicon 192.168.10.1 vicon
 | `cfw` | none | Start the keyboard wand command prompt without publishing a fake pose. |
 | `cfwand` | none | Backward-compatible name for `cfw`. |
 | `cfwandsim` | none | Start the keyboard wand and also publish its simulated pose. |
-| `cfwandgesture` | `[vicon_pose_topic]` | Recognize up/down, side-to-side, and down/up mission gestures from a Vicon wand. Defaults to `/vicon/wand/wand`. |
+| `cfwandgesture` | `[vicon_pose_topic]` | Recognize up/down, side-to-side, and down/up mission gestures from a Vicon wand. Defaults to `/vicon/cfw/cfw`. |
 | `cfwanddriver` | `[wand_id] [wand_uri]` | Read pose and attitude from the physical wand. Defaults to `cf2`. |
 | `cfswarmstart` | none | Run swarm arm, takeoff, configured mission, and landing. |
 | `cfswarmarm` | none | Arm all swarm members. |
@@ -115,8 +116,9 @@ are intentionally exclusive; do not switch sources while airborne.
 
 `TOPIC` means the actual Vicon `PoseStamped` topic for that rigid body.
 `TOPICS` and `RADIO_URIS` are comma-separated lists in the same order as
-`IDS`. The hardware swarm launcher requires a separately addressable radio
-URI for each controller process, normally one Crazyradio per flying drone.
+`IDS`. Each drone needs a unique radio address, but the hardware swarm runner
+keeps all controller links in one process so CFLib can multiplex them through
+one Crazyradio. Multiple URIs may therefore begin with `radio://0`.
 
 The physical `cf2` cannot be a handheld wand and a flying swarm member at the
 same time. For a wand-controlled `cf1,cf2` swarm, use the keyboard `cfw`
@@ -405,8 +407,10 @@ IDLE -> ARMING -> ARM_SETTLE -> TAKEOFF -> HOVER -> MISSION
      -> LANDING -> IDLE
 ```
 
-The two-drone mission logs `SPREAD`, `FORWARD`, and `RETURN_HOME`. At any time,
-request a normal multi-drone landing or an emergency stop with:
+The `two_drone_lab` profile selects the same-named orbit/stack mission. It logs
+`INITIAL_HOVER`, `VERTICAL_STACK`, `UNSTACK`, `ORBIT_00` through `ORBIT_12`,
+and `FINAL_HOVER` before landing. At any time, request a normal multi-drone
+landing or an emergency stop with:
 
 ```bash
 cfswarmland
@@ -581,8 +585,20 @@ cftakeoff cf1
 
 ## Test 11: Vicon wand gestures with Vicon-controlled cf1
 
-Use a second Crazyradio if the two separate processes cannot share one radio.
-Remove all props from the handheld `cf2`.
+Remove all props from the handheld `cf2`. The combined button-wand launch
+keeps the flying drone and wand connections in one process so both addresses
+can share `radio://0`.
+
+Wire two normally-open momentary buttons between the wand deck pins and GND:
+
+```text
+enable button: DECK_GPIO_IO1 --- momentary switch --- GND
+E-stop button: DECK_GPIO_IO2 --- momentary switch --- GND
+```
+
+The firmware uses `INPUT_PULLUP`; do not wire either input to a supply rail.
+`wand_buttons.c` must be built into the wand firmware so the `wand.enable`,
+`wand.disable`, and `wand.stop` log variables exist.
 
 ### Terminal 1 - Vicon
 
@@ -594,7 +610,7 @@ cfvicon 192.168.10.1 vicon
 
 ```bash
 cfenv
-cfwandflight cf1 vicon /vicon/cf231/cf231 "" hover_test
+cfbuttonwandflight cf1 vicon /vicon/cf1/cf1 "" hover_test cf2
 ```
 
 ### Terminal 3 - Vicon gesture recognizer
@@ -603,7 +619,7 @@ Use the actual Vicon subject and segment topic for the tracked wand:
 
 ```bash
 cfenv
-cfwandgesture /vicon/wand/wand
+cfwandgesture /vicon/cfw/cfw
 ```
 
 Verify recognition without props first:
@@ -614,23 +630,14 @@ ros2 topic echo /wand/gesture
 
 Expected events are `up_down`, `side_to_side`, and `down_up`.
 
-### Optional physical wand attitude driver
+Recognition is disabled by default. Hold IO1 while performing a gesture;
+releasing IO1 disables recognition and makes the flying controller hold its
+current target. IO2 publishes `emergency_stop` and bypasses the enable gate.
 
-The radio driver is needed only when tilt-to-position control is also being
-tested. Vicon position gesture recognition does not require this process.
+### Physical wand verification
 
-Using the configured radio URI:
-
-```bash
-cfenv
-cfwanddriver cf2
-```
-
-Using a second Crazyradio at index 1:
-
-```bash
-cfwanddriver cf2 radio://1/80/2M/E7E7E7E7E6
-```
+`cfbuttonwandflight` already starts the physical wand driver. Do not start a
+second `cfwanddriver` process for this test.
 
 ### Terminal 4 - optional tilt verification
 
@@ -638,6 +645,8 @@ cfwanddriver cf2 radio://1/80/2M/E7E7E7E7E6
 cfenv
 ros2 topic hz /wand/pose
 ros2 topic echo /wand/connected
+ros2 topic echo /wand/enabled
+ros2 topic echo /wand/gesture
 ```
 
 ### Terminal 5 - arm and emergency stop
@@ -694,9 +703,10 @@ The expected phases are `HOVER`, `FORWARD`, and `RETURN_HOME`.
 
 ## Test 12: Hardware swarm with Vicon
 
-Do not run this until Test 7 completes normally in Gazebo. Use one separately
-addressable Crazyradio per flying controller process. Replace the Vicon topic
-examples below with the two topics verified by `ros2 topic list`.
+Do not run this until Test 7 completes normally in Gazebo. One Crazyradio can
+serve the swarm because all hardware controller links run inside one shared
+process. Each Crazyflie must still have a unique address. Replace the Vicon
+topic examples below with the two topics verified by `ros2 topic list`.
 
 ### Terminal 1 - Vicon receiver
 
@@ -712,11 +722,45 @@ cfbuild
 cfswarm two_drone_lab autonomous vicon
 ```
 
+During takeoff, each controller adds a bounded `0.08 m/s` vertical boost below
+`0.15 m` above its recorded floor position. This is the velocity-controller
+equivalent of requesting slightly more lift through ground effect; the normal
+`0.30 m/s` velocity limit remains active. The swarm allows 20 seconds for both
+drones to reach takeoff height. A timeout now reports each drone's measured
+height and state.
+
+The receiver may publish roughly 100 Vicon poses per second per rigid body.
+The controller uses Vicon directly as the authoritative ROS control and swarm
+safety position, while retaining onboard `stateEstimate` telemetry for the
+preflight agreement check. By default, only 10 Hz is forwarded to each onboard
+estimator. This preserves shared-Crazyradio bandwidth for commands and return
+telemetry. Expect periodic messages similar to:
+
+```text
+Vicon rates: input 100.0 Hz, forwarded 9.0-10.0 Hz; estimator telemetry 10.0 Hz, age 0.05 s
+```
+
 Wait for both Vicon-ready messages. Verify each position stream separately:
 
 ```bash
 cfpos cf1
 cfpos cf2
+```
+
+Both position streams must remain continuous before flight. To test a
+different forwarding limit without editing the source configuration, launch
+directly and add `vicon_forward_rate_hz:=8.0`:
+
+```bash
+ros2 launch cf_control control.launch.py \
+  mode:=swarm profile_name:=two_drone_lab input:=autonomous \
+  positioning_source:=vicon vicon_forward_rate_hz:=8.0
+```
+
+Also verify that the shared runner and both logical controller nodes exist:
+
+```bash
+ros2 node list | grep -E 'hardware_swarm_runner|cf[12]_control'
 ```
 
 Keep a dedicated terminal ready with `cfswarmstop`. Start the full saved

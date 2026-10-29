@@ -41,6 +41,8 @@ POSITION_TIMEOUT_S = 0.5
 # Crazyflie firmware estimator selection: 2 selects the Kalman estimator.
 KALMAN_ESTIMATOR = 2
 VICON_ESTIMATOR_MAX_ERROR_M = 0.5
+# Limit radio traffic while retaining the full-rate ROS Vicon stream.
+VICON_FORWARD_RATE_HZ = 10.0
 
 
 # ************* FIRST FLIGHT TEST ***************
@@ -53,6 +55,9 @@ FLIGHT_TEST_FIGURE_EIGHT_RADIUS_M = 0.35
 FLIGHT_TEST_FIGURE_EIGHT_DURATION_S = 20.0
 FLIGHT_TEST_POSITION_TOLERANCE_M = 0.08
 ARM_SETTLE_TIME_S = 1.0
+# Extra vertical demand below this height helps clear near-floor ground effect.
+TAKEOFF_BOOST_M_S = 0.08
+TAKEOFF_BOOST_END_HEIGHT_M = 0.15
 LANDING_HEIGHT_M = 0.05
 LANDING_COMPLETE_TOLERANCE_M = 0.03
 LANDING_SPEED_M_S = 0.10
@@ -72,11 +77,11 @@ EXTERNAL_MAX_HEIGHT_M = 0.75
 # ************* SWARM CONTROL ***************
 
 DEFAULT_SWARM_PROFILE = 'two_drone_lab'
-DEFAULT_SWARM_MISSION = 'two_drone_demo'
+DEFAULT_SWARM_MISSION = 'two_drone_lab'
 SWARM_CONTROL_RATE_HZ = 10.0
 SWARM_POSITION_TOLERANCE_M = 0.07
 SWARM_MIN_SEPARATION_M = 0.25
-SWARM_TAKEOFF_TIMEOUT_S = 12.0
+SWARM_TAKEOFF_TIMEOUT_S = 20.0
 SWARM_MAX_FLIGHT_TIME_S = 90.0
 
 
@@ -84,7 +89,7 @@ SWARM_MAX_FLIGHT_TIME_S = 90.0
 
 WAND_GESTURE_TOPIC = '/wand/gesture'
 WAND_POSE_TOPIC = '/wand/pose'
-WAND_VICON_POSE_TOPIC = '/vicon/wand/wand'
+WAND_VICON_POSE_TOPIC = '/vicon/cfw/cfw'
 WAND_ENABLED_TOPIC = '/wand/enabled'
 WAND_CONNECTED_TOPIC = '/wand/connected'
 WAND_FRAME_ID = 'world'
@@ -109,6 +114,7 @@ WAND_GESTURE_ACTIONS = {
 VALID_WAND_GESTURES = {
     'enable',
     'disable',
+    'emergency_stop',
     'takeoff',
     'land',
     'move_left',

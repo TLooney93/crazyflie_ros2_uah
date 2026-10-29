@@ -3,6 +3,7 @@
 import math
 
 from cf_control.wand_control import (
+    ButtonEdges,
     euler_degrees_to_quaternion,
     gesture_action,
     move_simulated_position,
@@ -22,6 +23,26 @@ def test_physical_gestures_map_to_guarded_actions():
     assert gesture_action('up_down') == 'takeoff'
     assert gesture_action('side_to_side') == 'start_mission'
     assert gesture_action('down_up') == 'land'
+    assert gesture_action('emergency_stop') == 'emergency_stop'
+
+
+def test_button_edges_publish_only_once_per_firmware_pulse():
+    edges = ButtonEdges()
+
+    assert not edges.pressed('wand.enable', 0)
+    assert edges.pressed('wand.enable', 1)
+    assert not edges.pressed('wand.enable', 1)
+    assert not edges.pressed('wand.enable', 0)
+    assert edges.pressed('wand.enable', 1)
+
+
+def test_gesture_reset_requires_a_new_baseline():
+    recognizer = PositionGestureRecognizer()
+
+    assert recognizer.update((0.0, 0.0, 1.0), 0.0) is None
+    assert recognizer.update((0.0, 0.0, 1.20), 0.2) is None
+    recognizer.reset()
+    assert recognizer.update((0.0, 0.0, 1.0), 0.3) is None
 
 
 def test_up_down_gesture_requires_return_to_baseline():
