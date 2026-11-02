@@ -3,6 +3,7 @@ import unittest
 from cf_control.flight_controller import (
     FlightController,
     ground_effect_takeoff_boost,
+    limit_horizontal_velocity,
 )
 
 
@@ -24,6 +25,18 @@ class FlightControllerTest(unittest.TestCase):
         self.assertEqual(
             controller.update((1.0, 2.0, 3.0)),
             (0.0, 0.0, 0.0),
+        )
+
+    def test_horizontal_velocity_limit_preserves_direction(self):
+        vx, vy = limit_horizontal_velocity(0.3, 0.4, 0.1)
+
+        self.assertAlmostEqual(vx, 0.06)
+        self.assertAlmostEqual(vy, 0.08)
+
+    def test_horizontal_velocity_below_limit_is_unchanged(self):
+        self.assertEqual(
+            limit_horizontal_velocity(0.03, -0.04, 0.1),
+            (0.03, -0.04),
         )
 
     def test_position_error_produces_proportional_velocity(self):

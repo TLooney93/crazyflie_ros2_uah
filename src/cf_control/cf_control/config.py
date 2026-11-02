@@ -40,9 +40,14 @@ POSITION_TIMEOUT_S = 0.5
 
 # Crazyflie firmware estimator selection: 2 selects the Kalman estimator.
 KALMAN_ESTIMATOR = 2
-VICON_ESTIMATOR_MAX_ERROR_M = 0.5
+VICON_ESTIMATOR_MAX_ERROR_M = 0.15
 # Limit radio traffic while retaining the full-rate ROS Vicon stream.
 VICON_FORWARD_RATE_HZ = 10.0
+# Reject receiver dropout sentinels and physically impossible pose jumps.
+VICON_ZERO_POSITION_EPSILON_M = 1e-4
+VICON_MAX_POSITION_JUMP_M = 0.20
+VICON_REACQUIRE_TOLERANCE_M = 0.03
+VICON_REACQUIRE_SAMPLES = 10
 
 
 # ************* FIRST FLIGHT TEST ***************
@@ -58,9 +63,14 @@ ARM_SETTLE_TIME_S = 1.0
 # Extra vertical demand below this height helps clear near-floor ground effect.
 TAKEOFF_BOOST_M_S = 0.08
 TAKEOFF_BOOST_END_HEIGHT_M = 0.15
+# Keep takeoff inside a narrow vertical launch column.
+TAKEOFF_MAX_HORIZONTAL_VELOCITY_M_S = 0.08
+TAKEOFF_MAX_HORIZONTAL_DEVIATION_M = 0.20
 LANDING_HEIGHT_M = 0.05
 LANDING_COMPLETE_TOLERANCE_M = 0.03
 LANDING_SPEED_M_S = 0.10
+# Do not interpret a low-altitude safety landing as an immediate touchdown.
+LANDING_MIN_DURATION_S = 1.0
 # Safety timeout for takeoff, hover, figure eight, and landing.
 MAX_FLIGHT_TIME_S = 35.0
 TELEMETRY_LOSS_DESCENT_S = 3.0
@@ -69,9 +79,9 @@ ENABLE_EXTERNAL_TARGETS = False
 # Bounds applied whenever a ROS topic is used as the position-command source.
 # Targets are absolute world coordinates, but are constrained relative to the
 # position recorded when the vehicle was armed.
-EXTERNAL_MAX_HORIZONTAL_OFFSET_M = 0.75
+EXTERNAL_MAX_HORIZONTAL_OFFSET_M = 0.85
 EXTERNAL_MIN_HEIGHT_M = 0.10
-EXTERNAL_MAX_HEIGHT_M = 0.75
+EXTERNAL_MAX_HEIGHT_M = 2
 
 
 # ************* SWARM CONTROL ***************
@@ -81,6 +91,10 @@ DEFAULT_SWARM_MISSION = 'two_drone_lab'
 SWARM_CONTROL_RATE_HZ = 10.0
 SWARM_POSITION_TOLERANCE_M = 0.07
 SWARM_MIN_SEPARATION_M = 0.25
+SWARM_CRITICAL_SEPARATION_M = 0.15
+SWARM_PREFLIGHT_MIN_SEPARATION_M = 0.50
+SWARM_SEPARATION_VIOLATION_S = 0.30
+SWARM_DIAGNOSTIC_PERIOD_S = 1.0
 SWARM_TAKEOFF_TIMEOUT_S = 20.0
 SWARM_MAX_FLIGHT_TIME_S = 90.0
 

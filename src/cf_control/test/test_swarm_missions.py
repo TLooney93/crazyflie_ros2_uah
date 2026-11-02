@@ -1,5 +1,8 @@
 """Tests for editable swarm mission definitions."""
 
+import math
+
+from cf_control.config import SWARM_MIN_SEPARATION_M
 from cf_control.swarm_missions import load_swarm_mission
 import pytest
 
@@ -12,7 +15,39 @@ def test_two_drone_lab_loads_orbit_stack_for_expected_drones():
     assert phases[-1]['name'] == 'FINAL_HOVER'
     assert all(set(phase['offsets']) == {'cf1', 'cf2'} for phase in phases)
     assert 'VERTICAL_STACK' in [phase['name'] for phase in phases]
-    assert len([p for p in phases if p['name'].startswith('ORBIT_')]) == 13
+    orbit = [p for p in phases if p['name'].startswith('ORBIT_')]
+    assert len(orbit) == 16
+    assert orbit[0]['name'] == 'ORBIT_01'
+    assert orbit[-1]['name'] == 'ORBIT_16'
+    assert all(phase['arrival_tolerance_m'] == 0.10 for phase in orbit)
+    assert all(phase['timeout_s'] == 8.0 for phase in orbit)
+    stationary = [phase for phase in phases if not phase['name'].startswith('ORBIT_')]
+    assert all(phase['arrival_tolerance_m'] == 0.15 for phase in stationary)
+    assert all(phase['timeout_s'] == 20.0 for phase in stationary)
+
+
+def test_two_drone_lab_stack_is_staggered_away_from_rotor_wash():
+    """The upper stack target must not sit directly over the lower drone."""
+    phases = load_swarm_mission('two_drone_lab', ['cf1', 'cf2'])
+    stack = next(phase for phase in phases if phase['name'] == 'VERTICAL_STACK')
+
+    # Hardware homes are x=-0.30/+0.30 m in the lab setup.
+    cf1 = tuple(
+        home + offset
+        for home, offset in zip((-0.30, 0.0, 0.0), stack['offsets']['cf1'])
+    )
+    cf2 = tuple(
+        home + offset
+        for home, offset in zip((0.30, 0.0, 0.0), stack['offsets']['cf2'])
+    )
+
+    lateral_separation = math.hypot(
+        cf2[0] - cf1[0],
+        cf2[1] - cf1[1],
+    )
+    assert lateral_separation == pytest.approx(0.45)
+    assert cf2[2] - cf1[2] >= 0.70
+    assert math.dist(cf1, cf2) > SWARM_MIN_SEPARATION_M
 
 
 def test_two_drone_demo_remains_a_compatibility_alias():

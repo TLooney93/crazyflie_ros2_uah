@@ -17,6 +17,7 @@ from cf_control.config import (
     KALMAN_ESTIMATOR,
     LANDING_COMPLETE_TOLERANCE_M,
     LANDING_HEIGHT_M,
+    LANDING_MIN_DURATION_S,
     LANDING_SPEED_M_S,
     MAX_FLIGHT_TIME_S,
     MAX_VELOCITY,
@@ -24,11 +25,17 @@ from cf_control.config import (
     POSITION_TIMEOUT_S,
     TAKEOFF_BOOST_END_HEIGHT_M,
     TAKEOFF_BOOST_M_S,
+    TAKEOFF_MAX_HORIZONTAL_DEVIATION_M,
+    TAKEOFF_MAX_HORIZONTAL_VELOCITY_M_S,
     TELEMETRY_LOSS_DESCENT_S,
     TELEMETRY_PERIOD_MS,
     VALID_WAND_GESTURES,
     VICON_ESTIMATOR_MAX_ERROR_M,
     VICON_FORWARD_RATE_HZ,
+    VICON_MAX_POSITION_JUMP_M,
+    VICON_REACQUIRE_SAMPLES,
+    VICON_REACQUIRE_TOLERANCE_M,
+    VICON_ZERO_POSITION_EPSILON_M,
     WAND_GESTURE_TOPIC,
     WAND_MAX_HORIZONTAL_OFFSET_M,
     WAND_POSE_TOPIC,
@@ -44,6 +51,7 @@ from cf_control.crazyflie_missions import load_crazyflie_mission
 from cf_control.flight_controller import (
     FlightController,
     ground_effect_takeoff_boost,
+    limit_horizontal_velocity,
 )
 from cf_control.flight_state import FlightState
 from cf_control.lighthouse import LighthouseManager
@@ -177,6 +185,10 @@ class CrazyflieNode(Node):
         self.position_lock = Lock()
         self.vicon_received_at = None
         self.vicon_position = None
+        self.vicon_consecutive_valid_samples = 0
+        self.vicon_tracking_invalid = False
+        self.vicon_reacquire_position = None
+        self.vicon_reacquire_samples = 0
         self.vicon_initial_samples = 0
         self.vicon_post_reset_samples = 0
         self.vicon_estimator_reset = False
@@ -199,7 +211,7 @@ class CrazyflieNode(Node):
             )
             self.get_logger().info(
                 f'Vicon positioning selected: {vicon_pose_topic}; '
-                f'estimator forwarding limited to '
+                f'position forwarding limited to '
                 f'{self.vicon_forward_rate_hz:.1f} Hz'
             )
 
@@ -219,6 +231,7 @@ class CrazyflieNode(Node):
         self.takeoff_height_m = None
         self.test_feedforward = (0.0, 0.0, 0.0)
         self.telemetry_lost_at = None
+        self.landing_started_at = None
         self.wand_active = False
         self.wand_orientation = None
         self.wand_reference_orientation = None
@@ -442,12 +455,13 @@ class CrazyflieNode(Node):
                     response,
                     'Cannot arm without fresh onboard estimator telemetry'
                 )
-            if math.dist(estimator_position, position) > (
-                VICON_ESTIMATOR_MAX_ERROR_M
-            ):
+            estimator_error_m = math.dist(estimator_position, position)
+            if estimator_error_m > VICON_ESTIMATOR_MAX_ERROR_M:
                 return self._service_failure(
                     response,
-                    'Cannot arm: fused position does not agree with Vicon'
+                    'Cannot arm: fused position differs from Vicon by '
+                    f'{estimator_error_m:.3f} m; limit is '
+                    f'{VICON_ESTIMATOR_MAX_ERROR_M:.2f} m'
                 )
 
         self.home_position = position
@@ -781,6 +795,8 @@ class CrazyflieNode(Node):
 
     def _on_vicon_pose(self, msg):
         """Validate and forward Vicon position to the onboard estimator."""
+        received_at = time.monotonic()
+        self.vicon_raw_samples += 1
         position = (
             float(msg.pose.position.x),
             float(msg.pose.position.y),
@@ -788,13 +804,37 @@ class CrazyflieNode(Node):
         )
 
         if not all(math.isfinite(value) for value in position):
-            self.get_logger().warning('Ignoring non-finite Vicon position')
+            self._reject_vicon_position(
+                received_at,
+                'non-finite Vicon position',
+            )
             return
 
-        received_at = time.monotonic()
+        if max(abs(value) for value in position) <= (
+            VICON_ZERO_POSITION_EPSILON_M
+        ):
+            self._reject_vicon_position(
+                received_at,
+                'zero Vicon pose indicates tracking loss',
+            )
+            return
+
+        if not self._vicon_jump_is_acceptable(position):
+            if not self._try_reacquire_vicon(position):
+                self._reject_vicon_position(
+                    received_at,
+                    'implausible Vicon position jump',
+                )
+                return
+
+        if self.vicon_tracking_invalid:
+            self.get_logger().info('Vicon position tracking recovered')
+        self.vicon_tracking_invalid = False
+        self.vicon_reacquire_position = None
+        self.vicon_reacquire_samples = 0
         self.vicon_position = position
         self.vicon_received_at = received_at
-        self.vicon_raw_samples += 1
+        self.vicon_consecutive_valid_samples += 1
 
         # In Vicon mode the camera measurement is the authoritative position
         # for the ROS outer loop and swarm safety checks. The onboard Kalman
@@ -819,6 +859,7 @@ class CrazyflieNode(Node):
                 )
                 self.lighthouse.reset_estimator()
                 self.vicon_estimator_reset = True
+                self.vicon_consecutive_valid_samples = 0
             return
 
         if self.vicon_post_reset_samples < 10:
@@ -827,6 +868,47 @@ class CrazyflieNode(Node):
                 self.get_logger().info(
                     'Vicon positioning is ready for arming'
                 )
+
+    def _vicon_jump_is_acceptable(self, position):
+        """Return whether a new measurement is close to the last valid one."""
+        return (
+            self.vicon_position is None
+            or math.dist(position, self.vicon_position)
+            <= VICON_MAX_POSITION_JUMP_M
+        )
+
+    def _try_reacquire_vicon(self, position):
+        """Allow stable reacquisition only while the drone is disarmed."""
+        if self.flight_state is not FlightState.DISARMED:
+            self.vicon_reacquire_position = None
+            self.vicon_reacquire_samples = 0
+            return False
+
+        if (
+            self.vicon_reacquire_position is None
+            or math.dist(position, self.vicon_reacquire_position)
+            > VICON_REACQUIRE_TOLERANCE_M
+        ):
+            self.vicon_reacquire_position = position
+            self.vicon_reacquire_samples = 1
+            return False
+
+        self.vicon_reacquire_samples += 1
+        if self.vicon_reacquire_samples < VICON_REACQUIRE_SAMPLES:
+            return False
+
+        self.get_logger().warning(
+            'Accepting stable Vicon position after disarmed reacquisition'
+        )
+        return True
+
+    def _reject_vicon_position(self, received_at, reason):
+        """Reject an invalid measurement without refreshing position age."""
+        self.vicon_consecutive_valid_samples = 0
+        if not self.vicon_tracking_invalid:
+            self.get_logger().error(f'Rejecting {reason}')
+        self.vicon_tracking_invalid = True
+        self._report_vicon_rates(received_at)
 
     def _report_vicon_rates(self, received_at):
         """Periodically report ROS input and radio-forwarding rates."""
@@ -937,6 +1019,7 @@ class CrazyflieNode(Node):
         if not position_is_fresh:
             if self.telemetry_lost_at is None:
                 self.telemetry_lost_at = now
+                self.landing_started_at = now
                 self.test_feedforward = (0.0, 0.0, 0.0)
                 self._set_state(FlightState.LANDING)
                 self.get_logger().error(
@@ -954,12 +1037,49 @@ class CrazyflieNode(Node):
 
         self.telemetry_lost_at = None
 
+        takeoff_active = (
+            self.flight_state is FlightState.FLYING
+            and self.test_phase in (
+                'TAKEOFF',
+                'EXTERNAL_TAKEOFF',
+                'WAND_TAKEOFF',
+            )
+        )
+        if takeoff_active:
+            horizontal_deviation_m = math.hypot(
+                position[0] - self.home_position[0],
+                position[1] - self.home_position[1],
+            )
+            if horizontal_deviation_m > (
+                TAKEOFF_MAX_HORIZONTAL_DEVIATION_M
+            ):
+                self._begin_landing(
+                    'Takeoff left launch column by '
+                    f'{horizontal_deviation_m:.3f} m',
+                    landing_xy=position[:2],
+                )
+                takeoff_active = False
+
         if self.flight_state is FlightState.FLYING:
             self._update_test_sequence(position, now)
+            takeoff_active = self.test_phase in (
+                'TAKEOFF',
+                'EXTERNAL_TAKEOFF',
+                'WAND_TAKEOFF',
+            )
 
         if self.flight_state is FlightState.LANDING:
             landing_z = self.home_position[2] + LANDING_HEIGHT_M
-            if position[2] <= landing_z + LANDING_COMPLETE_TOLERANCE_M:
+            landing_elapsed = (
+                now - self.landing_started_at
+                if self.landing_started_at is not None
+                else 0.0
+            )
+            if (
+                landing_elapsed >= LANDING_MIN_DURATION_S
+                and position[2]
+                <= landing_z + LANDING_COMPLETE_TOLERANCE_M
+            ):
                 self._stop_and_disarm('Landing complete')
                 self.velocity_debug_pub.publish(msg)
                 return
@@ -985,6 +1105,12 @@ class CrazyflieNode(Node):
         vx = max(-MAX_VELOCITY, min(vx, MAX_VELOCITY))
         vy = max(-MAX_VELOCITY, min(vy, MAX_VELOCITY))
         vz = max(-MAX_VELOCITY, min(vz, MAX_VELOCITY))
+        if takeoff_active:
+            vx, vy = limit_horizontal_velocity(
+                vx,
+                vy,
+                TAKEOFF_MAX_HORIZONTAL_VELOCITY_M_S,
+            )
         if self.flight_state is FlightState.LANDING:
             vz = max(vz, -LANDING_SPEED_M_S)
 
@@ -1150,20 +1276,27 @@ class CrazyflieNode(Node):
         return (
             self.vicon_estimator_reset
             and self.vicon_post_reset_samples >= 10
+            and self.vicon_consecutive_valid_samples >= 10
             and self.vicon_received_at is not None
             and time.monotonic() - self.vicon_received_at
             <= POSITION_TIMEOUT_S
         )
 
-    def _begin_landing(self, reason):
+    def _begin_landing(self, reason, landing_xy=None):
         if self.home_position is None:
             self._stop_and_disarm(f'{reason}; no home position')
             return
 
+        landing_x, landing_y = (
+            landing_xy
+            if landing_xy is not None
+            else self.home_position[:2]
+        )
         self.test_feedforward = (0.0, 0.0, 0.0)
+        self.landing_started_at = time.monotonic()
         self.flight_controller.set_target(
-            self.home_position[0],
-            self.home_position[1],
+            landing_x,
+            landing_y,
             self.home_position[2] + LANDING_HEIGHT_M
         )
         self._set_state(FlightState.LANDING)
@@ -1180,6 +1313,7 @@ class CrazyflieNode(Node):
         self.takeoff_height_m = None
         self.test_feedforward = (0.0, 0.0, 0.0)
         self.telemetry_lost_at = None
+        self.landing_started_at = None
         self.armed_at = None
         self.wand_active = False
         self.wand_reference_orientation = None

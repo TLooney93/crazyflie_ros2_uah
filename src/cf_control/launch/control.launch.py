@@ -8,7 +8,14 @@ from cf_control.config import (
 )
 from cf_control.swarm_profiles import load_swarm_profile
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction
+from launch.actions import (
+    DeclareLaunchArgument,
+    EmitEvent,
+    OpaqueFunction,
+    RegisterEventHandler,
+)
+from launch.event_handlers import OnProcessExit
+from launch.events import Shutdown
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -135,12 +142,12 @@ def _build_nodes(context):
         and input_mode == 'wand'
         and physical_wand_enabled
     )
+    hardware_runner = None
     if use_shared_runner:
-        nodes.append(
-            Node(
-                package='cf_control',
-                executable='hardware_swarm_runner',
-                parameters=[{
+        hardware_runner = Node(
+            package='cf_control',
+            executable='hardware_swarm_runner',
+            parameters=[{
                     'drone_ids': drone_ids,
                     'vicon_topics': vicon_topics,
                     'radio_uris': radio_uris,
@@ -163,10 +170,10 @@ def _build_nodes(context):
                     'physical_wand_enabled': physical_wand_enabled,
                     'wand_id': wand_id,
                     'wand_uri': wand_uri,
-                }],
-                output='screen',
-            )
+            }],
+            output='screen',
         )
+        nodes.append(hardware_runner)
     else:
         drone_id = drone_ids[0]
         parameters = {
@@ -211,6 +218,22 @@ def _build_nodes(context):
                     'wand_group_mode': input_mode == 'wand',
                 }],
                 output='screen',
+            )
+        )
+
+    if hardware_runner is not None:
+        nodes.append(
+            RegisterEventHandler(
+                OnProcessExit(
+                    target_action=hardware_runner,
+                    on_exit=[
+                        EmitEvent(
+                            event=Shutdown(
+                                reason='Hardware controller process exited'
+                            )
+                        )
+                    ],
+                )
             )
         )
 

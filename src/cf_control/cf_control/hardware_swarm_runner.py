@@ -1,5 +1,7 @@
 """Run multiple hardware Crazyflie controllers through shared radios."""
 
+import time
+
 from cf_control.config import DRONES, VICON_FORWARD_RATE_HZ
 from cf_control.crazyflie_node import CrazyflieNode
 from cf_control.wand_driver_node import WandDriverNode
@@ -124,6 +126,33 @@ class HardwareSwarmRunner(Node):
         return WandDriverNode(parameter_overrides=overrides)
 
 
+def _connect_controller(controller, logger, attempts=3):
+    """Connect one controller with bounded retries and clear diagnostics."""
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        try:
+            controller.connect()
+            return
+        except Exception as error:
+            last_error = error
+            logger.warning(
+                f'Connection attempt {attempt}/{attempts} failed for '
+                f'{controller.drone_id} at {controller.uri}: {error}'
+            )
+            try:
+                controller.scf.close_link()
+            except Exception:
+                pass
+            if attempt < attempts:
+                time.sleep(0.5)
+
+    raise RuntimeError(
+        f'Unable to connect {controller.drone_id} at {controller.uri} '
+        f'after {attempts} attempts. Verify power, battery, channel, '
+        f'address, and antenna range. Last error: {last_error}'
+    )
+
+
 def main(args=None):
     """Connect and spin all hardware controllers in one shared process."""
     rclpy.init(args=args)
@@ -139,7 +168,7 @@ def main(args=None):
         wand_driver = runner.create_wand_driver()
 
         for controller in controllers:
-            controller.connect()
+            _connect_controller(controller, runner.get_logger())
         if wand_driver is not None:
             wand_driver.connect()
 

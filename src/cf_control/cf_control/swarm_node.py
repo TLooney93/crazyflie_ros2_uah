@@ -8,9 +8,13 @@ from cf_control.config import (
     DEFAULT_SWARM_MISSION,
     POSITION_TIMEOUT_S,
     SWARM_CONTROL_RATE_HZ,
+    SWARM_CRITICAL_SEPARATION_M,
+    SWARM_DIAGNOSTIC_PERIOD_S,
     SWARM_MAX_FLIGHT_TIME_S,
     SWARM_MIN_SEPARATION_M,
     SWARM_POSITION_TOLERANCE_M,
+    SWARM_PREFLIGHT_MIN_SEPARATION_M,
+    SWARM_SEPARATION_VIOLATION_S,
     SWARM_TAKEOFF_TIMEOUT_S,
 )
 from cf_control.swarm_missions import load_swarm_mission
@@ -139,8 +143,11 @@ class SwarmNode(Node):
         self.run_full_sequence = False
         self.phase_index = None
         self.phase_arrived_at = None
+        self.phase_started_at = None
         self.wand_flight_detected_at = None
         self.last_status_published_at = 0.0
+        self.last_diagnostic_logged_at = 0.0
+        self.separation_violation_started_at = None
 
         self.control_timer = self.create_timer(
             1.0 / SWARM_CONTROL_RATE_HZ,
@@ -263,6 +270,7 @@ class SwarmNode(Node):
         """Advance pending service actions and the active mission phase."""
         now = time.monotonic()
         self._publish_periodic_status(now)
+        self._log_flight_diagnostics(now)
 
         if self.pending_action is not None:
             self._check_pending_action(now)
@@ -284,8 +292,21 @@ class SwarmNode(Node):
             if not self._positions_are_fresh():
                 self._safety_land('Swarm position data became stale')
                 return
-            if not self._actual_positions_are_separated():
-                self._safety_land('Swarm separation fell below safety limit')
+            aborted = [
+                drone_id
+                for drone_id in self.drone_ids
+                if self.drone_states.get(drone_id)
+                in ('LANDING', 'DISARMED')
+            ]
+            if aborted:
+                self._safety_land(
+                    'Swarm member aborted active flight: '
+                    + ', '.join(aborted)
+                )
+                return
+            separation_error = self._separation_safety_error(now)
+            if separation_error:
+                self._safety_land(separation_error)
                 return
             if (
                 self.sequence_started_at is not None
@@ -332,6 +353,21 @@ class SwarmNode(Node):
             for drone_id in self.drone_ids
         ):
             return 'Every drone must report DISARMED before arming'
+        separation = self._minimum_separation()
+        if (
+            separation is None
+            or separation[0] < SWARM_PREFLIGHT_MIN_SEPARATION_M
+        ):
+            measured = (
+                'unknown'
+                if separation is None
+                else f'{separation[0]:.3f} m'
+            )
+            return (
+                'Preflight separation is '
+                f'{measured}; require at least '
+                f'{SWARM_PREFLIGHT_MIN_SEPARATION_M:.2f} m'
+            )
         return None
 
     def _action_error(self, action, required_state):
@@ -445,8 +481,10 @@ class SwarmNode(Node):
         return '; '.join(progress)
 
     def _begin_mission(self):
+        now = time.monotonic()
         self.phase_index = 0
         self.phase_arrived_at = None
+        self.phase_started_at = now
         self._set_state('MISSION')
         self.get_logger().info(
             f'Swarm mission phase: {self.mission[0]["name"]}'
@@ -460,9 +498,29 @@ class SwarmNode(Node):
             msg.x, msg.y, msg.z = target
             self.target_publishers[drone_id].publish(msg)
 
+        timeout_s = phase.get('timeout_s')
+        if (
+            timeout_s is not None
+            and self.phase_started_at is not None
+            and now - self.phase_started_at >= timeout_s
+        ):
+            errors = ', '.join(
+                f'{drone_id}={math.dist(self.positions[drone_id], target):.3f} m'
+                for drone_id, target in targets.items()
+            )
+            self._safety_land(
+                f'Swarm mission phase {phase["name"]} timed out after '
+                f'{timeout_s:.1f} s; target errors: {errors}'
+            )
+            return
+
+        arrival_tolerance_m = phase.get(
+            'arrival_tolerance_m',
+            SWARM_POSITION_TOLERANCE_M,
+        )
         all_arrived = all(
             math.dist(self.positions[drone_id], targets[drone_id])
-            <= SWARM_POSITION_TOLERANCE_M
+            <= arrival_tolerance_m
             for drone_id in self.drone_ids
         )
         if not all_arrived:
@@ -478,9 +536,11 @@ class SwarmNode(Node):
         self.phase_index += 1
         self.phase_arrived_at = None
         if self.phase_index >= len(self.mission):
+            self.phase_started_at = None
             self._dispatch_action('land', 'LAND_REQUESTED', active_only=True)
             return
 
+        self.phase_started_at = now
         self.get_logger().info(
             f'Swarm mission phase: {self.mission[self.phase_index]["name"]}'
         )
@@ -524,12 +584,60 @@ class SwarmNode(Node):
         )
 
     def _actual_positions_are_separated(self):
-        positions = [self.positions[drone_id] for drone_id in self.drone_ids]
-        for index, first in enumerate(positions):
-            for second in positions[index + 1:]:
-                if math.dist(first, second) < SWARM_MIN_SEPARATION_M:
-                    return False
-        return True
+        separation = self._minimum_separation()
+        return separation is not None and separation[0] >= SWARM_MIN_SEPARATION_M
+
+    def _minimum_separation(self):
+        """Return minimum measured separation and its drone pair."""
+        closest = None
+        for index, first_id in enumerate(self.drone_ids):
+            if first_id not in self.positions:
+                return None
+            for second_id in self.drone_ids[index + 1:]:
+                if second_id not in self.positions:
+                    return None
+                distance = math.dist(
+                    self.positions[first_id],
+                    self.positions[second_id],
+                )
+                if closest is None or distance < closest[0]:
+                    closest = (distance, first_id, second_id)
+        return closest
+
+    def _separation_safety_error(self, now):
+        """Return a safety error for critical or sustained proximity."""
+        separation = self._minimum_separation()
+        if separation is None:
+            self.separation_violation_started_at = None
+            return None
+
+        distance, first_id, second_id = separation
+        if distance < SWARM_CRITICAL_SEPARATION_M:
+            self.separation_violation_started_at = None
+            return (
+                f'Critical swarm separation: {first_id}/{second_id} '
+                f'at {distance:.3f} m'
+            )
+
+        if distance >= SWARM_MIN_SEPARATION_M:
+            self.separation_violation_started_at = None
+            return None
+
+        if self.separation_violation_started_at is None:
+            self.separation_violation_started_at = now
+            self.get_logger().warning(
+                f'Separation warning: {first_id}/{second_id} at '
+                f'{distance:.3f} m'
+            )
+            return None
+
+        violation_s = now - self.separation_violation_started_at
+        if violation_s < SWARM_SEPARATION_VIOLATION_S:
+            return None
+        return (
+            f'Sustained swarm separation violation: {first_id}/{second_id} '
+            f'at {distance:.3f} m for {violation_s:.2f} s'
+        )
 
     def _update_wand_group_monitor(self, now):
         """Monitor common wand control without issuing movement targets."""
@@ -553,10 +661,9 @@ class SwarmNode(Node):
             if not self._positions_are_fresh():
                 self._safety_land('Wand swarm position data became stale')
                 return
-            if not self._actual_positions_are_separated():
-                self._safety_land(
-                    'Wand swarm separation fell below safety limit'
-                )
+            separation_error = self._separation_safety_error(now)
+            if separation_error:
+                self._safety_land(f'Wand {separation_error}')
                 return
             if (
                 now - self.wand_flight_detected_at >= 1.0
@@ -592,6 +699,66 @@ class SwarmNode(Node):
     def _publish_periodic_status(self, now):
         if now - self.last_status_published_at >= 1.0:
             self._publish_status()
+
+    def _log_flight_diagnostics(self, now):
+        """Log measured positions, targets, and closest separation."""
+        if (
+            self.swarm_state not in ('TAKEOFF', 'HOVER', 'MISSION')
+            or now - self.last_diagnostic_logged_at
+            < SWARM_DIAGNOSTIC_PERIOD_S
+        ):
+            return
+
+        position_text = ', '.join(
+            f'{drone_id}=('
+            f'{self.positions[drone_id][0]:.3f},'
+            f'{self.positions[drone_id][1]:.3f},'
+            f'{self.positions[drone_id][2]:.3f})'
+            for drone_id in self.drone_ids
+            if drone_id in self.positions
+        )
+        targets = self._active_diagnostic_targets()
+        target_text = ', '.join(
+            f'{drone_id}=('
+            f'{targets[drone_id][0]:.3f},'
+            f'{targets[drone_id][1]:.3f},'
+            f'{targets[drone_id][2]:.3f})'
+            for drone_id in self.drone_ids
+            if drone_id in targets
+        )
+        separation = self._minimum_separation()
+        separation_text = (
+            'unknown'
+            if separation is None
+            else (
+                f'{separation[0]:.3f} m '
+                f'({separation[1]}/{separation[2]})'
+            )
+        )
+        self.get_logger().info(
+            f'Swarm diagnostics: positions[{position_text}]; '
+            f'targets[{target_text}]; '
+            f'min separation={separation_text}'
+        )
+        self.last_diagnostic_logged_at = now
+
+    def _active_diagnostic_targets(self):
+        """Return the targets expected for the current swarm state."""
+        if not self.home_positions:
+            return {}
+        if self.swarm_state in ('TAKEOFF', 'HOVER'):
+            return {
+                drone_id: (
+                    self.home_positions[drone_id][0],
+                    self.home_positions[drone_id][1],
+                    self.home_positions[drone_id][2]
+                    + self.takeoff_height_m,
+                )
+                for drone_id in self.drone_ids
+            }
+        if self.swarm_state == 'MISSION' and self.phase_index is not None:
+            return self._targets_for_phase(self.mission[self.phase_index])
+        return {}
 
     def _publish_status(self):
         msg = String()

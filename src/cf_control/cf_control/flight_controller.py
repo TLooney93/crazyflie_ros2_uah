@@ -1,3 +1,6 @@
+import math
+
+
 def ground_effect_takeoff_boost(
     height_above_floor_m,
     boost_end_height_m,
@@ -7,6 +10,15 @@ def ground_effect_takeoff_boost(
     if height_above_floor_m < boost_end_height_m:
         return boost_m_s
     return 0.0
+
+
+def limit_horizontal_velocity(vx, vy, max_velocity):
+    """Limit horizontal speed while preserving the requested direction."""
+    speed = math.hypot(vx, vy)
+    if speed <= max_velocity or speed == 0.0:
+        return vx, vy
+    scale = max_velocity / speed
+    return vx * scale, vy * scale
 
 
 class FlightController:

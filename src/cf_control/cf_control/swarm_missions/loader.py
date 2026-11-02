@@ -64,6 +64,30 @@ def load_swarm_mission(name, drone_ids):
         if hold_s < 0.0:
             raise ValueError(f'Phase {phase_name!r} hold_s cannot be negative')
 
+        timeout_s = phase.get('timeout_s')
+        if timeout_s is not None:
+            if (
+                not isinstance(timeout_s, (int, float))
+                or not math.isfinite(timeout_s)
+                or timeout_s <= hold_s
+            ):
+                raise ValueError(
+                    f'Phase {phase_name!r} timeout_s must be finite and '
+                    'greater than hold_s'
+                )
+
+        arrival_tolerance_m = phase.get('arrival_tolerance_m')
+        if arrival_tolerance_m is not None:
+            if (
+                not isinstance(arrival_tolerance_m, (int, float))
+                or not math.isfinite(arrival_tolerance_m)
+                or arrival_tolerance_m <= 0.0
+            ):
+                raise ValueError(
+                    f'Phase {phase_name!r} arrival_tolerance_m must be a '
+                    'positive finite number'
+                )
+
         for drone_id, offset in offsets.items():
             if len(offset) != 3 or not all(math.isfinite(v) for v in offset):
                 raise ValueError(
