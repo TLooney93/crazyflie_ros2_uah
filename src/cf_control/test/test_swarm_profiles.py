@@ -25,8 +25,9 @@ def test_two_drone_profile_is_hardware_complete():
         profile['mission_name'],
         profile['drone_ids'],
     )
-    assert any(phase['name'] == 'VERTICAL_STACK' for phase in mission)
-    assert any(phase['name'].startswith('ORBIT_') for phase in mission)
+    assert any(phase['name'] == 'ORBIT_ENTRY' for phase in mission)
+    assert not any(phase['name'] == 'VERTICAL_STACK' for phase in mission)
+    assert any(phase['name'] == 'CONTINUOUS_ORBIT' for phase in mission)
 
 
 def test_five_drone_profile_is_available_for_simulation():

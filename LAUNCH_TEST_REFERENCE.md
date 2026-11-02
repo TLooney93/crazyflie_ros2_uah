@@ -407,10 +407,13 @@ IDLE -> ARMING -> ARM_SETTLE -> TAKEOFF -> HOVER -> MISSION
      -> LANDING -> IDLE
 ```
 
-The `two_drone_lab` profile selects the same-named orbit/stack mission. It logs
-`INITIAL_HOVER`, `VERTICAL_STACK`, `UNSTACK`, `ORBIT_00` through `ORBIT_12`,
-and `FINAL_HOVER` before landing. At any time, request a normal multi-drone
-landing or an emergency stop with:
+The `two_drone_lab` profile selects the same-named separated-orbit mission. It
+logs `INITIAL_HOVER`, `ORBIT_ENTRY`, `CONTINUOUS_ORBIT`, and `FINAL_HOVER`
+before landing. The orbit is a 30-second continuous trajectory with bounded
+tangential velocity feedforward, not a sequence of stop-and-go waypoints.
+Both drones stay at the same commanded height and 0.60 m apart through the
+shared orbit; no vertical stack is attempted. At any time, request a normal
+multi-drone landing or an emergency stop with:
 
 ```bash
 cfswarmland
@@ -722,12 +725,14 @@ cfbuild
 cfswarm two_drone_lab autonomous vicon
 ```
 
-During takeoff, each controller adds a bounded `0.08 m/s` vertical boost below
-`0.15 m` above its recorded floor position. This is the velocity-controller
+During takeoff, each controller adds a bounded `0.12 m/s` vertical boost below
+`0.25 m` above its recorded floor position. This is the velocity-controller
 equivalent of requesting slightly more lift through ground effect; the normal
 `0.30 m/s` velocity limit remains active. The swarm allows 20 seconds for both
-drones to reach takeoff height. A timeout now reports each drone's measured
-height and state.
+drones to reach within `0.12 m` of takeoff height. A timeout reports each
+drone's measured height and state. During a mission, each drone's waypoint
+arrival is latched independently so natural motion does not require every
+vehicle to occupy its tolerance sphere on the same control sample.
 
 The receiver may publish roughly 100 Vicon poses per second per rigid body.
 The controller uses Vicon directly as the authoritative ROS control and swarm

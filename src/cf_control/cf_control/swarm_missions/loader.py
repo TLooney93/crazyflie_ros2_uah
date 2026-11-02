@@ -1,9 +1,11 @@
 """
 Registry and validation for saved swarm missions.
 
-Offsets are meters relative to each drone's position when it was armed. To
-register a mission, import its ``MISSION_NAME`` and ``MISSION`` below and add
-that pair to ``SWARM_MISSIONS``.
+``offsets`` are meters relative to each drone's arming position.
+``formation_targets`` are along/across coordinates relative to the measured
+midpoint and cf1-to-cf2 launch baseline. ``trajectory`` defines a continuous
+two-drone formation path. To register a mission, import its ``MISSION_NAME``
+and ``MISSION`` below and add that pair to ``SWARM_MISSIONS``.
 """
 
 import math
@@ -51,11 +53,33 @@ def load_swarm_mission(name, drone_ids):
     expected_ids = set(requested_ids)
     for phase in phases:
         phase_name = phase.get('name', '<unnamed>')
-        offsets = phase.get('offsets', {})
-        if set(offsets) != expected_ids:
+        offsets = phase.get('offsets')
+        formation_targets = phase.get('formation_targets')
+        trajectory = phase.get('trajectory')
+        target_fields = [
+            value
+            for value in (offsets, formation_targets, trajectory)
+            if value is not None
+        ]
+        if len(target_fields) != 1:
             raise ValueError(
-                f'Phase {phase_name!r} offsets must exactly match '
+                f'Phase {phase_name!r} must define exactly one of offsets, '
+                'formation_targets, or trajectory'
+            )
+        coordinates = offsets if offsets is not None else formation_targets
+        coordinate_name = (
+            'offsets' if offsets is not None else 'formation_targets'
+        )
+        if coordinates is not None and set(coordinates) != expected_ids:
+            raise ValueError(
+                f'Phase {phase_name!r} {coordinate_name} must exactly match '
                 f'{sorted(expected_ids)}'
+            )
+        if (
+            formation_targets is not None or trajectory is not None
+        ) and len(requested_ids) != 2:
+            raise ValueError(
+                'formation targets and trajectories require exactly two drones'
             )
 
         hold_s = phase.get('hold_s')
@@ -88,7 +112,36 @@ def load_swarm_mission(name, drone_ids):
                     'positive finite number'
                 )
 
-        for drone_id, offset in offsets.items():
+        if trajectory is not None:
+            if trajectory.get('type') != 'formation_orbit':
+                raise ValueError(
+                    f'Phase {phase_name!r} has an unsupported trajectory'
+                )
+            radius_m = trajectory.get('radius_m')
+            height_m = trajectory.get('height_m')
+            duration_s = trajectory.get('duration_s')
+            if not all(
+                isinstance(value, (int, float)) and math.isfinite(value)
+                for value in (radius_m, height_m, duration_s)
+            ):
+                raise ValueError(
+                    f'Phase {phase_name!r} trajectory values must be finite'
+                )
+            if radius_m <= 0.0 or radius_m > EXTERNAL_MAX_HORIZONTAL_OFFSET_M:
+                raise ValueError(
+                    f'Phase {phase_name!r} has an invalid trajectory radius'
+                )
+            if not EXTERNAL_MIN_HEIGHT_M <= height_m <= EXTERNAL_MAX_HEIGHT_M:
+                raise ValueError(
+                    f'Phase {phase_name!r} has an invalid trajectory height'
+                )
+            if duration_s <= 0.0:
+                raise ValueError(
+                    f'Phase {phase_name!r} trajectory duration must be positive'
+                )
+            continue
+
+        for drone_id, offset in coordinates.items():
             if len(offset) != 3 or not all(math.isfinite(v) for v in offset):
                 raise ValueError(
                     f'Phase {phase_name!r} has an invalid offset for '

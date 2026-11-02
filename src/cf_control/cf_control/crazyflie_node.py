@@ -9,6 +9,8 @@ from cf_control.config import (
     DEFAULT_CRAZYFLIE_MISSION,
     DRONES,
     ENABLE_EXTERNAL_TARGETS,
+    EXTERNAL_FEEDFORWARD_TIMEOUT_S,
+    EXTERNAL_MAX_FEEDFORWARD_M_S,
     EXTERNAL_MAX_HEIGHT_M,
     EXTERNAL_MAX_HORIZONTAL_OFFSET_M,
     EXTERNAL_MIN_HEIGHT_M,
@@ -21,6 +23,8 @@ from cf_control.config import (
     LANDING_SPEED_M_S,
     MAX_FLIGHT_TIME_S,
     MAX_VELOCITY,
+    POSITION_INTEGRAL_MAX_VELOCITY_M_S,
+    POSITION_KI,
     POSITION_KP,
     POSITION_TIMEOUT_S,
     TAKEOFF_BOOST_END_HEIGHT_M,
@@ -182,6 +186,8 @@ class CrazyflieNode(Node):
         self.estimator_position = None
         self.estimator_position_received_at = None
         self.estimator_samples = 0
+        self.battery_voltage = None
+        self.attitude_degrees = None
         self.position_lock = Lock()
         self.vicon_received_at = None
         self.vicon_position = None
@@ -216,9 +222,13 @@ class CrazyflieNode(Node):
             )
 
         self.flight_controller = FlightController(
-                    kp=POSITION_KP,
-                    max_velocity=MAX_VELOCITY
-                )
+            kp=POSITION_KP,
+            ki=POSITION_KI,
+            max_velocity=MAX_VELOCITY,
+            integral_max_velocity=(
+                POSITION_INTEGRAL_MAX_VELOCITY_M_S
+            ),
+        )
 
         self.flight_state = FlightState.DISARMED
         self.home_position = None
@@ -230,6 +240,8 @@ class CrazyflieNode(Node):
         self.mission_phase_arrived_at = None
         self.takeoff_height_m = None
         self.test_feedforward = (0.0, 0.0, 0.0)
+        self.external_feedforward = (0.0, 0.0, 0.0)
+        self.external_feedforward_received_at = None
         self.telemetry_lost_at = None
         self.landing_started_at = None
         self.wand_active = False
@@ -250,6 +262,12 @@ class CrazyflieNode(Node):
             f'/{self.drone_id}/target',
             self.target_callback,
             10
+        )
+        self.feedforward_sub = self.create_subscription(
+            Twist,
+            f'/{self.drone_id}/feedforward',
+            self.feedforward_callback,
+            10,
         )
 
         self.wand_gesture_sub = None
@@ -293,7 +311,8 @@ class CrazyflieNode(Node):
             self.telemetry = TelemetryReader(
                 self.scf,
                 callback=self._on_position,
-                period_ms=TELEMETRY_PERIOD_MS
+                period_ms=TELEMETRY_PERIOD_MS,
+                include_attitude=True,
             )
 
         self.velocity_debug_pub = self.create_publisher(
@@ -414,9 +433,39 @@ class CrazyflieNode(Node):
                 f'Target stored: {msg.x}, {msg.y}, {msg.z}'
             )
 
+    def feedforward_callback(self, msg):
+        """Store a bounded, short-lived external velocity feedforward."""
+        if (
+            not self.external_targets_enabled
+            or self.flight_state is not FlightState.FLYING
+            or self.flight_mode != 'external'
+            or self.test_phase != 'EXTERNAL_HOVER'
+        ):
+            return
+
+        velocity = (
+            float(msg.linear.x),
+            float(msg.linear.y),
+            float(msg.linear.z),
+        )
+        if not all(math.isfinite(value) for value in velocity):
+            self.get_logger().warning('Ignoring non-finite feedforward')
+            return
+        speed_m_s = math.sqrt(sum(value * value for value in velocity))
+        if speed_m_s > EXTERNAL_MAX_FEEDFORWARD_M_S:
+            self.get_logger().warning(
+                'Ignoring feedforward above '
+                f'{EXTERNAL_MAX_FEEDFORWARD_M_S:.2f} m/s'
+            )
+            return
+
+        self.external_feedforward = velocity
+        self.external_feedforward_received_at = time.monotonic()
+
     def clear_target_callback(self, request, response):
         """Clear the target used by the dry-run controller."""
         self.flight_controller.clear_target()
+        self._clear_external_feedforward()
 
         self.get_logger().info('Target cleared')
 
@@ -921,17 +970,27 @@ class CrazyflieNode(Node):
         with self.position_lock:
             estimator_rate = self.estimator_samples / elapsed
             estimator_received_at = self.estimator_position_received_at
+            battery_voltage = self.battery_voltage
+            attitude_degrees = self.attitude_degrees
             self.estimator_samples = 0
         estimator_age = (
             received_at - estimator_received_at
             if estimator_received_at is not None
             else float('inf')
         )
+        health_text = ''
+        if battery_voltage is not None and attitude_degrees is not None:
+            health_text = (
+                f'; battery {battery_voltage:.2f} V; attitude '
+                f'roll={attitude_degrees[0]:.1f}, '
+                f'pitch={attitude_degrees[1]:.1f}, '
+                f'yaw={attitude_degrees[2]:.1f} deg'
+            )
         self.get_logger().info(
             f'Vicon rates: input {raw_rate:.1f} Hz, '
             f'forwarded {forward_rate:.1f} Hz; '
             f'estimator telemetry {estimator_rate:.1f} Hz, '
-            f'age {estimator_age:.2f} s'
+            f'age {estimator_age:.2f} s{health_text}'
         )
         self.vicon_rate_window_started_at = received_at
         self.vicon_raw_samples = 0
@@ -945,6 +1004,15 @@ class CrazyflieNode(Node):
         )
 
         valid = all(math.isfinite(value) for value in position)
+        battery_voltage = float(data.get('pm.vbat', float('nan')))
+        attitude = tuple(
+            float(data.get(name, float('nan')))
+            for name in (
+                'stabilizer.roll',
+                'stabilizer.pitch',
+                'stabilizer.yaw',
+            )
+        )
         with self.position_lock:
             self.estimator_position = position if valid else None
             self.estimator_position_received_at = (
@@ -952,6 +1020,14 @@ class CrazyflieNode(Node):
             )
             if valid:
                 self.estimator_samples += 1
+            self.battery_voltage = (
+                battery_voltage if math.isfinite(battery_voltage) else None
+            )
+            self.attitude_degrees = (
+                attitude
+                if all(math.isfinite(value) for value in attitude)
+                else None
+            )
 
         if self.simulation or self.positioning_source != 'vicon':
             self._store_position(position, received_at)
@@ -1084,10 +1160,22 @@ class CrazyflieNode(Node):
                 self.velocity_debug_pub.publish(msg)
                 return
 
-        vx, vy, vz = self.flight_controller.update(position)
+        vx, vy, vz = self.flight_controller.update(
+            position,
+            dt_s=1.0 / CONTROL_RATE_HZ,
+        )
         vx += self.test_feedforward[0]
         vy += self.test_feedforward[1]
         vz += self.test_feedforward[2]
+        if (
+            self.external_feedforward_received_at is not None
+            and now - self.external_feedforward_received_at
+            <= EXTERNAL_FEEDFORWARD_TIMEOUT_S
+            and self.test_phase == 'EXTERNAL_HOVER'
+        ):
+            vx += self.external_feedforward[0]
+            vy += self.external_feedforward[1]
+            vz += self.external_feedforward[2]
         if (
             self.flight_state is FlightState.FLYING
             and self.test_phase in (
@@ -1293,6 +1381,7 @@ class CrazyflieNode(Node):
             else self.home_position[:2]
         )
         self.test_feedforward = (0.0, 0.0, 0.0)
+        self._clear_external_feedforward()
         self.landing_started_at = time.monotonic()
         self.flight_controller.set_target(
             landing_x,
@@ -1312,6 +1401,7 @@ class CrazyflieNode(Node):
         self.mission_phase_arrived_at = None
         self.takeoff_height_m = None
         self.test_feedforward = (0.0, 0.0, 0.0)
+        self._clear_external_feedforward()
         self.telemetry_lost_at = None
         self.landing_started_at = None
         self.armed_at = None
@@ -1320,6 +1410,11 @@ class CrazyflieNode(Node):
         self.wand_last_move_at = None
         self._set_state(FlightState.DISARMED)
         self.get_logger().warning(reason)
+
+    def _clear_external_feedforward(self):
+        """Clear any short-lived coordinator velocity feedforward."""
+        self.external_feedforward = (0.0, 0.0, 0.0)
+        self.external_feedforward_received_at = None
 
     def _set_state(self, state):
         self.flight_state = state

@@ -15,10 +15,11 @@ from cf_control.config import (
     SWARM_POSITION_TOLERANCE_M,
     SWARM_PREFLIGHT_MIN_SEPARATION_M,
     SWARM_SEPARATION_VIOLATION_S,
+    SWARM_TAKEOFF_POSITION_TOLERANCE_M,
     SWARM_TAKEOFF_TIMEOUT_S,
 )
 from cf_control.swarm_missions import load_swarm_mission
-from geometry_msgs.msg import Point
+from geometry_msgs.msg import Point, Twist
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
@@ -61,6 +62,7 @@ class SwarmNode(Node):
         self.drone_states = {}
         self.home_positions = {}
         self.target_publishers = {}
+        self.feedforward_publishers = {}
         self.service_clients = {}
         self.subscription_handles = []
 
@@ -68,6 +70,11 @@ class SwarmNode(Node):
             self.target_publishers[drone_id] = self.create_publisher(
                 Point,
                 f'/{drone_id}/target',
+                10,
+            )
+            self.feedforward_publishers[drone_id] = self.create_publisher(
+                Twist,
+                f'/{drone_id}/feedforward',
                 10,
             )
             self.subscription_handles.append(
@@ -143,6 +150,7 @@ class SwarmNode(Node):
         self.run_full_sequence = False
         self.phase_index = None
         self.phase_arrived_at = None
+        self.phase_arrived_drones = set()
         self.phase_started_at = None
         self.wand_flight_detected_at = None
         self.last_status_published_at = 0.0
@@ -462,7 +470,7 @@ class SwarmNode(Node):
                     self.home_positions[drone_id][2]
                     + self.takeoff_height_m,
                 ),
-            ) <= SWARM_POSITION_TOLERANCE_M
+            ) <= SWARM_TAKEOFF_POSITION_TOLERANCE_M
             for drone_id in self.drone_ids
         )
 
@@ -484,6 +492,7 @@ class SwarmNode(Node):
         now = time.monotonic()
         self.phase_index = 0
         self.phase_arrived_at = None
+        self.phase_arrived_drones = set()
         self.phase_started_at = now
         self._set_state('MISSION')
         self.get_logger().info(
@@ -492,11 +501,19 @@ class SwarmNode(Node):
 
     def _update_mission(self, now):
         phase = self.mission[self.phase_index]
-        targets = self._targets_for_phase(phase)
-        for drone_id, target in targets.items():
-            msg = Point()
-            msg.x, msg.y, msg.z = target
-            self.target_publishers[drone_id].publish(msg)
+        elapsed_s = now - self.phase_started_at
+        if phase.get('trajectory') is not None:
+            targets, feedforwards = self._trajectory_commands(
+                phase,
+                elapsed_s,
+            )
+        else:
+            targets = self._targets_for_phase(phase)
+            feedforwards = {
+                drone_id: (0.0, 0.0, 0.0)
+                for drone_id in self.drone_ids
+            }
+        self._publish_motion_commands(targets, feedforwards)
 
         timeout_s = phase.get('timeout_s')
         if (
@@ -514,16 +531,29 @@ class SwarmNode(Node):
             )
             return
 
+        trajectory = phase.get('trajectory')
+        if trajectory is not None:
+            if elapsed_s >= trajectory['duration_s']:
+                self._advance_mission_phase(now)
+            return
+
         arrival_tolerance_m = phase.get(
             'arrival_tolerance_m',
             SWARM_POSITION_TOLERANCE_M,
         )
-        all_arrived = all(
-            math.dist(self.positions[drone_id], targets[drone_id])
-            <= arrival_tolerance_m
+        target_errors = {
+            drone_id: math.dist(
+                self.positions[drone_id],
+                targets[drone_id],
+            )
             for drone_id in self.drone_ids
-        )
-        if not all_arrived:
+        }
+        for drone_id, error_m in target_errors.items():
+            if error_m <= arrival_tolerance_m:
+                self.phase_arrived_drones.add(drone_id)
+            elif error_m > arrival_tolerance_m * 1.5:
+                self.phase_arrived_drones.discard(drone_id)
+        if len(self.phase_arrived_drones) != len(self.drone_ids):
             self.phase_arrived_at = None
             return
 
@@ -533,8 +563,13 @@ class SwarmNode(Node):
         if now - self.phase_arrived_at < phase['hold_s']:
             return
 
+        self._advance_mission_phase(now)
+
+    def _advance_mission_phase(self, now):
+        """Advance to the next phase or request the automatic landing."""
         self.phase_index += 1
         self.phase_arrived_at = None
+        self.phase_arrived_drones = set()
         if self.phase_index >= len(self.mission):
             self.phase_started_at = None
             self._dispatch_action('land', 'LAND_REQUESTED', active_only=True)
@@ -545,7 +580,114 @@ class SwarmNode(Node):
             f'Swarm mission phase: {self.mission[self.phase_index]["name"]}'
         )
 
+    def _publish_motion_commands(self, targets, feedforwards):
+        """Publish synchronized position and velocity-feedforward commands."""
+        for drone_id, target in targets.items():
+            target_msg = Point()
+            target_msg.x, target_msg.y, target_msg.z = target
+            self.target_publishers[drone_id].publish(target_msg)
+
+            feedforward_msg = Twist()
+            (
+                feedforward_msg.linear.x,
+                feedforward_msg.linear.y,
+                feedforward_msg.linear.z,
+            ) = feedforwards[drone_id]
+            self.feedforward_publishers[drone_id].publish(feedforward_msg)
+
+    def _formation_frame(self):
+        """Return the measured two-drone midpoint and horizontal basis."""
+        first_id, second_id = self.drone_ids
+        first_home = self.home_positions[first_id]
+        second_home = self.home_positions[second_id]
+        dx = second_home[0] - first_home[0]
+        dy = second_home[1] - first_home[1]
+        baseline_m = math.hypot(dx, dy)
+        if baseline_m <= 1e-6:
+            raise ValueError('Formation baseline is too small')
+        along = (dx / baseline_m, dy / baseline_m)
+        across = (-along[1], along[0])
+        center = (
+            (first_home[0] + second_home[0]) / 2.0,
+            (first_home[1] + second_home[1]) / 2.0,
+        )
+        return center, along, across
+
+    def _formation_targets_to_world(self, formation_targets):
+        """Resolve midpoint-relative formation coordinates into world poses."""
+        center, along, across = self._formation_frame()
+        return {
+            drone_id: (
+                center[0]
+                + coordinates[0] * along[0]
+                + coordinates[1] * across[0],
+                center[1]
+                + coordinates[0] * along[1]
+                + coordinates[1] * across[1],
+                self.home_positions[drone_id][2] + coordinates[2],
+            )
+            for drone_id, coordinates in formation_targets.items()
+        }
+
+    def _formation_velocities_to_world(self, formation_velocities):
+        """Rotate formation-frame velocity vectors into the world frame."""
+        _, along, across = self._formation_frame()
+        return {
+            drone_id: (
+                velocity[0] * along[0] + velocity[1] * across[0],
+                velocity[0] * along[1] + velocity[1] * across[1],
+                velocity[2],
+            )
+            for drone_id, velocity in formation_velocities.items()
+        }
+
+    def _trajectory_commands(self, phase, elapsed_s):
+        """Return continuous formation targets and velocity feedforwards."""
+        trajectory = phase['trajectory']
+        duration_s = trajectory['duration_s']
+        progress = max(0.0, min(elapsed_s / duration_s, 1.0))
+        angle = 2.0 * math.pi * progress
+        angular_rate = 2.0 * math.pi / duration_s
+        radius_m = trajectory['radius_m']
+        height_m = trajectory['height_m']
+        cos_angle = math.cos(angle)
+        sin_angle = math.sin(angle)
+        formation_targets = {
+            self.drone_ids[0]: (
+                -radius_m * cos_angle,
+                -radius_m * sin_angle,
+                height_m,
+            ),
+            self.drone_ids[1]: (
+                radius_m * cos_angle,
+                radius_m * sin_angle,
+                height_m,
+            ),
+        }
+        formation_velocities = {
+            self.drone_ids[0]: (
+                radius_m * angular_rate * sin_angle,
+                -radius_m * angular_rate * cos_angle,
+                0.0,
+            ),
+            self.drone_ids[1]: (
+                -radius_m * angular_rate * sin_angle,
+                radius_m * angular_rate * cos_angle,
+                0.0,
+            ),
+        }
+        return (
+            self._formation_targets_to_world(formation_targets),
+            self._formation_velocities_to_world(formation_velocities),
+        )
+
     def _targets_for_phase(self, phase):
+        if phase.get('trajectory') is not None:
+            return self._trajectory_commands(phase, 0.0)[0]
+        formation_targets = phase.get('formation_targets')
+        if formation_targets is not None:
+            return self._formation_targets_to_world(formation_targets)
+
         return {
             drone_id: tuple(
                 home_value + offset_value
@@ -717,7 +859,7 @@ class SwarmNode(Node):
             for drone_id in self.drone_ids
             if drone_id in self.positions
         )
-        targets = self._active_diagnostic_targets()
+        targets = self._active_diagnostic_targets(now)
         target_text = ', '.join(
             f'{drone_id}=('
             f'{targets[drone_id][0]:.3f},'
@@ -742,7 +884,7 @@ class SwarmNode(Node):
         )
         self.last_diagnostic_logged_at = now
 
-    def _active_diagnostic_targets(self):
+    def _active_diagnostic_targets(self, now):
         """Return the targets expected for the current swarm state."""
         if not self.home_positions:
             return {}
@@ -757,7 +899,11 @@ class SwarmNode(Node):
                 for drone_id in self.drone_ids
             }
         if self.swarm_state == 'MISSION' and self.phase_index is not None:
-            return self._targets_for_phase(self.mission[self.phase_index])
+            phase = self.mission[self.phase_index]
+            if phase.get('trajectory') is not None:
+                elapsed_s = now - self.phase_started_at
+                return self._trajectory_commands(phase, elapsed_s)[0]
+            return self._targets_for_phase(phase)
         return {}
 
     def _publish_status(self):

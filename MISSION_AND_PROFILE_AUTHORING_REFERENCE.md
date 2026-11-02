@@ -193,9 +193,10 @@ MISSION_NAME = 'unique_swarm_mission_name'
 MISSION = [...]
 ```
 
-Every phase supplies one offset for every drone in the selected profile.
-Offsets are relative to each drone's own arming position, not a shared global
-origin.
+Every phase supplies exactly one target definition. Use `offsets` for motion
+relative to each vehicle's arming position. A two-drone phase may instead use
+`formation_targets` for geometry relative to the measured launch midpoint and
+baseline, or `trajectory` for a continuous formation path.
 
 ### Swarm mission template
 
@@ -240,9 +241,18 @@ Swarm phase fields:
 
 - `name`: a descriptive phase name; unique names are recommended.
 - `hold_s`: finite and non-negative. Timing starts only after every drone is
-  within `SWARM_POSITION_TOLERANCE_M` of its target.
-- `offsets`: a dictionary containing exactly the drone IDs in the profile.
-- Each offset is a finite `(x, y, z)` tuple in metres.
+  accepted inside the phase's arrival tolerance.
+- Define exactly one of `offsets`, `formation_targets`, or `trajectory`.
+- `offsets`: finite `(x, y, z)` metres relative to each drone's arming pose.
+- `formation_targets`: two-drone-only finite `(along, across, z)` metres.
+  `along` follows the measured `cf1`-to-`cf2` launch baseline, `across` is
+  perpendicular to it, and horizontal zero is the measured midpoint. Height
+  remains relative to each drone's recorded floor height.
+- `arrival_tolerance_m`: optional positive per-phase arrival radius.
+- `timeout_s`: optional positive phase timeout greater than `hold_s`.
+- `trajectory`: currently supports a two-drone `formation_orbit` with positive
+  `radius_m`, `height_m`, and `duration_s`. The coordinator publishes both
+  continuously changing position targets and tangential velocity feedforward.
 
 ### Swarm mission validation and safety rules
 
@@ -260,6 +270,36 @@ Swarm phase fields:
 Because offsets are relative to separate home positions, target separation
 depends on both the mission offsets and the physical or simulated starting
 formation.
+
+Use `formation_targets` for a shared stack, orbit, or other geometry that must
+remain correct when initial spacing or left/right drone placement changes:
+
+```python
+{
+    'name': 'SHARED_LINE',
+    'hold_s': 2.0,
+    'formation_targets': {
+        'cf1': (-0.30, 0.0, 0.45),
+        'cf2': (0.30, 0.0, 0.45),
+    },
+}
+```
+
+For a continuous shared orbit after moving to its entry formation:
+
+```python
+{
+    'name': 'CONTINUOUS_ORBIT',
+    'hold_s': 0.0,
+    'timeout_s': 35.0,
+    'trajectory': {
+        'type': 'formation_orbit',
+        'radius_m': 0.30,
+        'height_m': 0.45,
+        'duration_s': 30.0,
+    },
+}
+```
 
 ### Register the swarm mission
 

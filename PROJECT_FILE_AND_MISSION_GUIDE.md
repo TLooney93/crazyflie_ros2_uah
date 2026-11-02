@@ -587,9 +587,16 @@ MISSION = [
 ]
 ```
 
-Each offset is `(x, y, z)` in metres relative to that drone's own arming
-position. `hold_s` starts only after every drone is within the swarm position
-tolerance. Every phase must contain exactly the configured drone IDs.
+Each phase defines exactly one of `offsets`, `formation_targets`, or
+`trajectory`. Offset and formation dictionaries must contain exactly the
+configured drone IDs. An offset is `(x, y, z)` in metres relative to that
+drone's own arming position. For two-drone shared geometry, a formation target
+is `(along, across, z)` relative to the measured launch midpoint and
+`cf1`-to-`cf2` baseline. A `formation_orbit` trajectory adds a radius, height,
+and duration and publishes continuous targets with tangential feedforward.
+These formation forms are independent of world-axis alignment, initial
+spacing, and which side each drone occupies. `hold_s` starts after every drone
+is accepted inside the phase tolerance.
 
 The mission and profile must agree exactly. For example,
 `five_drone_lab` selects `five_drone_demo`, whose every phase contains `cf1`

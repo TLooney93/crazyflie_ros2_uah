@@ -31,6 +31,12 @@ CONTROL_RATE_HZ = 20.0
 
 # proportional gain used by controller
 POSITION_KP = 0.5
+# Keep the next hardware baseline proportional-only. Integral support remains
+# available in the controller, but is disabled after observed phase overshoot.
+POSITION_KI = 0.0
+POSITION_INTEGRAL_MAX_VELOCITY_M_S = 0.06
+EXTERNAL_FEEDFORWARD_TIMEOUT_S = 0.30
+EXTERNAL_MAX_FEEDFORWARD_M_S = 0.12
 
 
 # *************  TELEMETRY  ***************
@@ -61,8 +67,8 @@ FLIGHT_TEST_FIGURE_EIGHT_DURATION_S = 20.0
 FLIGHT_TEST_POSITION_TOLERANCE_M = 0.08
 ARM_SETTLE_TIME_S = 1.0
 # Extra vertical demand below this height helps clear near-floor ground effect.
-TAKEOFF_BOOST_M_S = 0.08
-TAKEOFF_BOOST_END_HEIGHT_M = 0.15
+TAKEOFF_BOOST_M_S = 0.12
+TAKEOFF_BOOST_END_HEIGHT_M = 0.25
 # Keep takeoff inside a narrow vertical launch column.
 TAKEOFF_MAX_HORIZONTAL_VELOCITY_M_S = 0.08
 TAKEOFF_MAX_HORIZONTAL_DEVIATION_M = 0.20
@@ -90,6 +96,10 @@ DEFAULT_SWARM_PROFILE = 'two_drone_lab'
 DEFAULT_SWARM_MISSION = 'two_drone_lab'
 SWARM_CONTROL_RATE_HZ = 10.0
 SWARM_POSITION_TOLERANCE_M = 0.07
+# Small hardware vehicles do not settle at the same instant.  Takeoff only
+# needs each member close enough to its commanded clearance height before the
+# coordinator begins the saved mission.
+SWARM_TAKEOFF_POSITION_TOLERANCE_M = 0.12
 SWARM_MIN_SEPARATION_M = 0.25
 SWARM_CRITICAL_SEPARATION_M = 0.15
 SWARM_PREFLIGHT_MIN_SEPARATION_M = 0.50

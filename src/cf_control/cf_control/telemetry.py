@@ -1,8 +1,8 @@
-import time
+from queue import Empty, Full, Queue
 import threading
-from queue import Queue, Empty, Full
-from cflib.crazyflie.log import LogConfig
+import time
 
+from cflib.crazyflie.log import LogConfig
 
 
 class TelemetryReader:
@@ -54,7 +54,7 @@ class TelemetryReader:
         self.thread.join(timeout=1.0)
 
         if self.thread.is_alive():
-            raise TimeoutError("Telemetry reader did not stop within 1 second")
+            raise TimeoutError('Telemetry reader did not stop within 1 second')
 
     def _on_log_data(self, timestamp, data, logconf):
         sample = (time.monotonic(), data)
@@ -78,10 +78,11 @@ class TelemetryReader:
         log_config.add_variable('stateEstimate.x', 'float')
         log_config.add_variable('stateEstimate.y', 'float')
         log_config.add_variable('stateEstimate.z', 'float')
+        log_config.add_variable('pm.vbat', 'FP16')
         if self.include_attitude:
-            log_config.add_variable('stabilizer.roll', 'float')
-            log_config.add_variable('stabilizer.pitch', 'float')
-            log_config.add_variable('stabilizer.yaw', 'float')
+            log_config.add_variable('stabilizer.roll', 'FP16')
+            log_config.add_variable('stabilizer.pitch', 'FP16')
+            log_config.add_variable('stabilizer.yaw', 'FP16')
         self.scf.cf.log.add_config(log_config)
         log_config.data_received_cb.add_callback(self._on_log_data)
 
@@ -104,4 +105,3 @@ class TelemetryReader:
             log_config.data_received_cb.remove_callback(self._on_log_data)
             log_config.stop()
             log_config.delete()
-
