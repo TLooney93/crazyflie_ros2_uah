@@ -20,7 +20,7 @@ class FlightControllerTest(unittest.TestCase):
                 TAKEOFF_BOOST_END_HEIGHT_M,
                 TAKEOFF_BOOST_M_S,
             ),
-            0.12,
+            TAKEOFF_BOOST_M_S,
         )
         self.assertEqual(
             ground_effect_takeoff_boost(

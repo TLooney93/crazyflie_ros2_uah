@@ -1,11 +1,25 @@
 """Tests for editable swarm mission definitions."""
 
 import math
+from types import SimpleNamespace
 
 from cf_control.config import SWARM_MIN_SEPARATION_M
 from cf_control.swarm_missions import load_swarm_mission
 from cf_control.swarm_node import SwarmNode
 import pytest
+
+
+class _RecordingLogger:
+    """Collect coordinator messages in unbound callback tests."""
+
+    def __init__(self):
+        self.messages = []
+
+    def info(self, message):
+        self.messages.append(message)
+
+    def warning(self, message):
+        self.messages.append(message)
 
 
 def test_two_drone_lab_loads_orbit_for_expected_drones():
@@ -145,6 +159,47 @@ def test_five_drone_demo_loads_for_expected_drones():
     ]
 
 
+def test_three_drone_demo_forms_triangle_and_orbits_after_hover():
+    """The three-drone choreography should go directly to its triangle."""
+    drone_ids = ['cf1', 'cf2', 'cf3']
+    phases = load_swarm_mission('three_drone_demo', drone_ids)
+
+    assert [phase['name'] for phase in phases] == [
+        'INITIAL_HOVER',
+        'TRIANGLE_ENTRY',
+        'TRIANGLE_ORBIT',
+    ]
+    orbit = phases[-1]
+    assert orbit['trajectory']['type'] == 'formation_orbit'
+    assert orbit['trajectory']['radius_m'] == pytest.approx(0.35)
+
+
+def test_three_drone_orbit_is_an_equilateral_triangle():
+    """Orbit targets should stay equally spaced around the launch center."""
+    node = object.__new__(SwarmNode)
+    node.drone_ids = ['cf1', 'cf2', 'cf3']
+    node.home_positions = {
+        'cf1': (-0.55, 0.0, 0.08),
+        'cf2': (0.0, 0.0, 0.08),
+        'cf3': (0.55, 0.0, 0.08),
+    }
+    phases = load_swarm_mission('three_drone_demo', node.drone_ids)
+    orbit = next(p for p in phases if p['name'] == 'TRIANGLE_ORBIT')
+
+    targets, feedforwards = node._trajectory_commands(orbit, 7.5)
+    pair_distances = [
+        math.dist(targets[first][:2], targets[second][:2])
+        for first, second in (('cf1', 'cf2'), ('cf2', 'cf3'), ('cf3', 'cf1'))
+    ]
+    expected_separation = math.sqrt(3.0) * 0.35
+    assert pair_distances == pytest.approx([expected_separation] * 3)
+    assert all(
+        math.hypot(*velocity[:2])
+        == pytest.approx(2.0 * math.pi * 0.35 / 30.0)
+        for velocity in feedforwards.values()
+    )
+
+
 def test_mission_rejects_wrong_drone_set():
     """Mission definitions must specify every requested drone."""
     with pytest.raises(ValueError, match='must exactly match'):
@@ -155,3 +210,104 @@ def test_mission_rejects_duplicate_drone_ids():
     """A drone cannot occupy two slots in the same mission."""
     with pytest.raises(ValueError, match='unique'):
         load_swarm_mission('two_drone_lab', ['cf1', 'cf1'])
+
+
+def test_takeoff_readiness_requires_every_controller_hover_phase():
+    """Position tolerance alone must not advance the swarm mission."""
+    node = object.__new__(SwarmNode)
+    node.drone_ids = ['cf1', 'cf2', 'cf3']
+    node.control_phases = {
+        'cf1': 'EXTERNAL_HOVER',
+        'cf2': 'EXTERNAL_TAKEOFF',
+        'cf3': 'EXTERNAL_HOVER',
+    }
+
+    assert not node._all_control_phases_are('EXTERNAL_HOVER')
+
+    node.control_phases['cf2'] = 'EXTERNAL_HOVER'
+    assert node._all_control_phases_are('EXTERNAL_HOVER')
+
+
+def test_side_to_side_starts_mission_after_full_wand_hover():
+    """The physical gesture should hand a stable swarm to its mission."""
+    logger = _RecordingLogger()
+    mission_started = []
+    node = SimpleNamespace(
+        pending_action=None,
+        swarm_state='WAND_ACTIVE',
+        drone_ids=['cf1', 'cf2', 'cf3'],
+        drone_states={
+            'cf1': 'FLYING',
+            'cf2': 'FLYING',
+            'cf3': 'FLYING',
+        },
+        mission_name='three_drone_demo',
+        run_full_sequence=False,
+        get_logger=lambda: logger,
+        _positions_are_fresh=lambda: True,
+        _all_control_phases_are=lambda phase: phase == 'WAND_HOVER',
+        _mission_targets_are_separated=lambda: True,
+        _begin_mission=lambda: mission_started.append(True),
+        _safety_land=lambda reason: None,
+    )
+
+    SwarmNode._on_wand_gesture(
+        node,
+        SimpleNamespace(data='side_to_side'),
+    )
+
+    assert node.run_full_sequence
+    assert mission_started == [True]
+
+
+def test_side_to_side_is_ignored_before_every_drone_reaches_hover():
+    """A partial swarm takeoff must not transition into choreography."""
+    logger = _RecordingLogger()
+    mission_started = []
+    node = SimpleNamespace(
+        pending_action=None,
+        swarm_state='WAND_ACTIVE',
+        drone_ids=['cf1', 'cf2', 'cf3'],
+        drone_states={
+            'cf1': 'FLYING',
+            'cf2': 'FLYING',
+            'cf3': 'FLYING',
+        },
+        mission_name='three_drone_demo',
+        run_full_sequence=False,
+        get_logger=lambda: logger,
+        _positions_are_fresh=lambda: True,
+        _all_control_phases_are=lambda phase: False,
+        _mission_targets_are_separated=lambda: True,
+        _begin_mission=lambda: mission_started.append(True),
+        _safety_land=lambda reason: None,
+    )
+
+    SwarmNode._on_wand_gesture(
+        node,
+        SimpleNamespace(data='side_to_side'),
+    )
+
+    assert not node.run_full_sequence
+    assert mission_started == []
+
+
+def test_sustained_altitude_collapse_is_reported():
+    """A member that falls after takeoff must abort the active mission."""
+    node = object.__new__(SwarmNode)
+    node.drone_ids = ['cf1', 'cf2']
+    node.takeoff_height_m = 0.45
+    node.home_positions = {
+        'cf1': (0.0, 0.0, 0.05),
+        'cf2': (0.6, 0.0, 0.05),
+    }
+    node.positions = {
+        'cf1': (0.0, 0.0, 0.08),
+        'cf2': (0.6, 0.0, 0.48),
+    }
+    node.altitude_violation_started_at = {}
+
+    assert node._altitude_safety_error(10.0) is None
+    error = node._altitude_safety_error(10.5)
+
+    assert 'Sustained altitude loss: cf1' in error

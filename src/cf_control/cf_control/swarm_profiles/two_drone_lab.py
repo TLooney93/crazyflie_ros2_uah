@@ -12,8 +12,8 @@ PROFILE = {
         'cf2': '/vicon/cf2/cf2',
     },
     'radio_uris': {
-        'cf1': DRONES['cf1'],
-        'cf2': DRONES['cf2'],
+        'cf1': DRONES.get('cf1', ''),
+        'cf2': DRONES.get('cf2', ''),
     },
     'mission_name': 'two_drone_lab',
     'simulation_world': 'crazyflie_swarm_world.sdf',

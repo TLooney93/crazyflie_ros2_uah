@@ -3,6 +3,7 @@
 import time
 
 from cf_control.config import DRONES, VICON_FORWARD_RATE_HZ
+from cf_control.crazyflie_interface import RadioCommandDispatcher
 from cf_control.crazyflie_node import CrazyflieNode
 from cf_control.wand_driver_node import WandDriverNode
 import cflib.crtp
@@ -17,6 +18,7 @@ class HardwareSwarmRunner(Node):
 
     def __init__(self):
         super().__init__('hardware_swarm_runner')
+        self.radio_dispatcher = RadioCommandDispatcher()
 
         self.declare_parameter('drone_ids', ['cf1', 'cf2'])
         self.declare_parameter('vicon_topics', ['', ''])
@@ -31,6 +33,7 @@ class HardwareSwarmRunner(Node):
         self.declare_parameter('external_targets_enabled', True)
         self.declare_parameter('flight_mode', 'external')
         self.declare_parameter('max_flight_time_s', 90.0)
+        self.declare_parameter('flight_height_m', 0.30)
         self.declare_parameter('mission_name', 'figure_eight')
         self.declare_parameter('physical_wand_enabled', False)
         self.declare_parameter('wand_id', 'cf2')
@@ -76,6 +79,7 @@ class HardwareSwarmRunner(Node):
             'max_flight_time_s': self.get_parameter(
                 'max_flight_time_s'
             ).value,
+            'flight_height_m': self.get_parameter('flight_height_m').value,
             'mission_name': self.get_parameter('mission_name').value,
         }
 
@@ -99,6 +103,7 @@ class HardwareSwarmRunner(Node):
                 CrazyflieNode(
                     node_name=f'{drone_id}_control',
                     parameter_overrides=overrides,
+                    radio_dispatcher=self.radio_dispatcher,
                 )
             )
 
@@ -214,6 +219,13 @@ def main(args=None):
                 wand_driver.destroy_node()
             except (KeyboardInterrupt, ExternalShutdownException):
                 pass
+        if runner is not None:
+            try:
+                runner.radio_dispatcher.shutdown()
+            except Exception as error:
+                runner.get_logger().error(
+                    f'Error stopping shared radio dispatcher: {error}'
+                )
         if runner is not None:
             try:
                 runner.destroy_node()

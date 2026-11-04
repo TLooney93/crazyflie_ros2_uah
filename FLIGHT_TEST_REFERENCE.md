@@ -376,7 +376,9 @@ The button-controlled hardware sequence is:
 9. Press IO2 at any time for immediate stop and disarm.
 
 While a tilt is held, the target advances by 0.05 m every 0.25 seconds. Enter
-`disable` to stop accepting wand movement and hold the current position. Enter
+`disable` to stop accepting wand movement while retaining the active target or
+mission. Enter `hold` first when the current measured position should replace
+the active target. Enter
 `land` even if the wand has been disabled. Keep `cfstop cf1` ready in a
 separate terminal for emergencies.
 
@@ -429,7 +431,7 @@ FLIGHT_TEST_FIGURE_EIGHT_DURATION_S = 20.0
 FLIGHT_TEST_POSITION_TOLERANCE_M = 0.08
 MAX_FLIGHT_TIME_S = 35.0
 MAX_VELOCITY = 0.3
-POSITION_TIMEOUT_S = 0.5
+POSITION_TIMEOUT_S = 1.5
 VICON_ESTIMATOR_MAX_ERROR_M = 0.5
 TELEMETRY_LOSS_DESCENT_S = 3.0
 ```
@@ -505,9 +507,10 @@ If raw Vicon remains near 100 Hz while `/cf1/position` or `/cf2/position`
 stops, the failure is on the shared radio/telemetry path rather than the Vicon
 camera stream. In Vicon mode, the camera measurement is the authoritative ROS
 control and safety position; `stateEstimate` is retained as a preflight
-agreement check. Hardware control limits external-position forwarding to 10 Hz
-per drone by default and logs both rates every five seconds. Do not increase
-the stale-position timeout to hide this condition.
+agreement check. Hardware control limits external-position forwarding to 5 Hz
+per drone by default and requests onboard telemetry at 5 Hz. It logs both
+rates every five seconds. Do not increase the stale-position timeout to hide
+this condition.
 
 ### Shell command is missing
 

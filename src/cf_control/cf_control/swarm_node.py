@@ -7,18 +7,23 @@ from cf_control.config import (
     ARM_SETTLE_TIME_S,
     DEFAULT_SWARM_MISSION,
     POSITION_TIMEOUT_S,
+    SWARM_ALTITUDE_LOSS_MARGIN_M,
+    SWARM_ALTITUDE_VIOLATION_S,
     SWARM_CONTROL_RATE_HZ,
     SWARM_CRITICAL_SEPARATION_M,
     SWARM_DIAGNOSTIC_PERIOD_S,
     SWARM_MAX_FLIGHT_TIME_S,
+    SWARM_MIN_AIRBORNE_HEIGHT_M,
     SWARM_MIN_SEPARATION_M,
     SWARM_POSITION_TOLERANCE_M,
     SWARM_PREFLIGHT_MIN_SEPARATION_M,
     SWARM_SEPARATION_VIOLATION_S,
     SWARM_TAKEOFF_POSITION_TOLERANCE_M,
     SWARM_TAKEOFF_TIMEOUT_S,
+    WAND_GESTURE_TOPIC,
 )
 from cf_control.swarm_missions import load_swarm_mission
+from cf_control.wand_control import gesture_action
 from geometry_msgs.msg import Point, Twist
 import rclpy
 from rclpy.executors import ExternalShutdownException
@@ -60,6 +65,7 @@ class SwarmNode(Node):
         self.positions = {}
         self.position_received_at = {}
         self.drone_states = {}
+        self.control_phases = {}
         self.home_positions = {}
         self.target_publishers = {}
         self.feedforward_publishers = {}
@@ -82,6 +88,17 @@ class SwarmNode(Node):
                     Point,
                     f'/{drone_id}/position',
                     lambda msg, name=drone_id: self._on_position(name, msg),
+                    10,
+                )
+            )
+            self.subscription_handles.append(
+                self.create_subscription(
+                    String,
+                    f'/{drone_id}/control_phase',
+                    lambda msg, name=drone_id: self._on_control_phase(
+                        name,
+                        msg,
+                    ),
                     10,
                 )
             )
@@ -141,6 +158,14 @@ class SwarmNode(Node):
             '/swarm/emergency_stop',
             self.stop_callback,
         )
+        self.wand_gesture_subscription = None
+        if self.wand_group_mode:
+            self.wand_gesture_subscription = self.create_subscription(
+                String,
+                WAND_GESTURE_TOPIC,
+                self._on_wand_gesture,
+                10,
+            )
 
         self.swarm_state = 'IDLE'
         self.pending_action = None
@@ -156,6 +181,7 @@ class SwarmNode(Node):
         self.last_status_published_at = 0.0
         self.last_diagnostic_logged_at = 0.0
         self.separation_violation_started_at = None
+        self.altitude_violation_started_at = {}
 
         self.control_timer = self.create_timer(
             1.0 / SWARM_CONTROL_RATE_HZ,
@@ -172,6 +198,54 @@ class SwarmNode(Node):
 
     def _on_state(self, drone_id, msg):
         self.drone_states[drone_id] = msg.data
+
+    def _on_control_phase(self, drone_id, msg):
+        self.control_phases[drone_id] = msg.data
+
+    def _on_wand_gesture(self, msg):
+        """Start the saved swarm mission from a stable wand hover."""
+        if gesture_action(msg.data) != 'start_mission':
+            return
+        if self.pending_action is not None:
+            self.get_logger().warning(
+                'Ignoring mission gesture while a swarm action is pending'
+            )
+            return
+        if self.swarm_state != 'WAND_ACTIVE':
+            self.get_logger().warning(
+                'Ignoring mission gesture until the wand swarm is active'
+            )
+            return
+        if not self._positions_are_fresh():
+            self.get_logger().warning(
+                'Ignoring mission gesture without fresh swarm positions'
+            )
+            return
+        if not all(
+            self.drone_states.get(drone_id) == 'FLYING'
+            for drone_id in self.drone_ids
+        ):
+            self.get_logger().warning(
+                'Ignoring mission gesture until every drone is flying'
+            )
+            return
+        if not self._all_control_phases_are('WAND_HOVER'):
+            self.get_logger().warning(
+                'Ignoring mission gesture until every drone reaches '
+                'WAND_HOVER'
+            )
+            return
+        if not self._mission_targets_are_separated():
+            self._safety_land(
+                'Mission target separation is below safety limit'
+            )
+            return
+
+        self.run_full_sequence = True
+        self._begin_mission()
+        self.get_logger().info(
+            f'Wand started swarm mission {self.mission_name!r}'
+        )
 
     def start_callback(self, request, response):
         """Queue arm, takeoff, mission, and landing as one sequence."""
@@ -284,7 +358,7 @@ class SwarmNode(Node):
             self._check_pending_action(now)
             return
 
-        if self.wand_group_mode:
+        if self.wand_group_mode and self.swarm_state != 'MISSION':
             self._update_wand_group_monitor(now)
             return
 
@@ -312,6 +386,11 @@ class SwarmNode(Node):
                     + ', '.join(aborted)
                 )
                 return
+            if self.swarm_state in ('HOVER', 'MISSION'):
+                altitude_error = self._altitude_safety_error(now)
+                if altitude_error:
+                    self._safety_land(altitude_error)
+                    return
             separation_error = self._separation_safety_error(now)
             if separation_error:
                 self._safety_land(separation_error)
@@ -330,7 +409,10 @@ class SwarmNode(Node):
                     + self._takeoff_progress_summary()
                 )
                 return
-            if self._all_at_takeoff_height():
+            if (
+                self._all_at_takeoff_height()
+                and self._all_control_phases_are('EXTERNAL_HOVER')
+            ):
                 self._set_state('HOVER')
                 if self.run_full_sequence:
                     if self._mission_targets_are_separated():
@@ -474,6 +556,13 @@ class SwarmNode(Node):
             for drone_id in self.drone_ids
         )
 
+    def _all_control_phases_are(self, expected):
+        """Return whether every controller acknowledged the same sub-state."""
+        return all(
+            self.control_phases.get(drone_id) == expected
+            for drone_id in self.drone_ids
+        )
+
     def _takeoff_progress_summary(self):
         """Describe each member's measured height when takeoff times out."""
         progress = []
@@ -485,7 +574,10 @@ class SwarmNode(Node):
             else:
                 height = f'{position[2] - home[2]:.2f} m'
             state = self.drone_states.get(drone_id, 'unknown')
-            progress.append(f'{drone_id}={height}, state={state}')
+            control_phase = self.control_phases.get(drone_id, 'unknown')
+            progress.append(
+                f'{drone_id}={height}, state={state}, phase={control_phase}'
+            )
         return '; '.join(progress)
 
     def _begin_mission(self):
@@ -596,20 +688,23 @@ class SwarmNode(Node):
             self.feedforward_publishers[drone_id].publish(feedforward_msg)
 
     def _formation_frame(self):
-        """Return the measured two-drone midpoint and horizontal basis."""
-        first_id, second_id = self.drone_ids
+        """Return the measured launch-line center and horizontal basis."""
+        first_id = self.drone_ids[0]
+        last_id = self.drone_ids[-1]
         first_home = self.home_positions[first_id]
-        second_home = self.home_positions[second_id]
-        dx = second_home[0] - first_home[0]
-        dy = second_home[1] - first_home[1]
+        last_home = self.home_positions[last_id]
+        dx = last_home[0] - first_home[0]
+        dy = last_home[1] - first_home[1]
         baseline_m = math.hypot(dx, dy)
         if baseline_m <= 1e-6:
             raise ValueError('Formation baseline is too small')
         along = (dx / baseline_m, dy / baseline_m)
         across = (-along[1], along[0])
         center = (
-            (first_home[0] + second_home[0]) / 2.0,
-            (first_home[1] + second_home[1]) / 2.0,
+            sum(self.home_positions[item][0] for item in self.drone_ids)
+            / len(self.drone_ids),
+            sum(self.home_positions[item][1] for item in self.drone_ids)
+            / len(self.drone_ids),
         )
         return center, along, across
 
@@ -650,32 +745,21 @@ class SwarmNode(Node):
         angular_rate = 2.0 * math.pi / duration_s
         radius_m = trajectory['radius_m']
         height_m = trajectory['height_m']
-        cos_angle = math.cos(angle)
-        sin_angle = math.sin(angle)
-        formation_targets = {
-            self.drone_ids[0]: (
-                -radius_m * cos_angle,
-                -radius_m * sin_angle,
+        phase_step = 2.0 * math.pi / len(self.drone_ids)
+        formation_targets = {}
+        formation_velocities = {}
+        for index, drone_id in enumerate(self.drone_ids):
+            drone_angle = math.pi + index * phase_step + angle
+            formation_targets[drone_id] = (
+                radius_m * math.cos(drone_angle),
+                radius_m * math.sin(drone_angle),
                 height_m,
-            ),
-            self.drone_ids[1]: (
-                radius_m * cos_angle,
-                radius_m * sin_angle,
-                height_m,
-            ),
-        }
-        formation_velocities = {
-            self.drone_ids[0]: (
-                radius_m * angular_rate * sin_angle,
-                -radius_m * angular_rate * cos_angle,
+            )
+            formation_velocities[drone_id] = (
+                -radius_m * angular_rate * math.sin(drone_angle),
+                radius_m * angular_rate * math.cos(drone_angle),
                 0.0,
-            ),
-            self.drone_ids[1]: (
-                -radius_m * angular_rate * sin_angle,
-                radius_m * angular_rate * cos_angle,
-                0.0,
-            ),
-        }
+            )
         return (
             self._formation_targets_to_world(formation_targets),
             self._formation_velocities_to_world(formation_velocities),
@@ -781,6 +865,35 @@ class SwarmNode(Node):
             f'at {distance:.3f} m for {violation_s:.2f} s'
         )
 
+    def _altitude_safety_error(self, now):
+        """Detect a sustained collapse after takeoff has completed."""
+        minimum_height_m = max(
+            SWARM_MIN_AIRBORNE_HEIGHT_M,
+            self.takeoff_height_m - SWARM_ALTITUDE_LOSS_MARGIN_M,
+        )
+        for drone_id in self.drone_ids:
+            position = self.positions.get(drone_id)
+            home = self.home_positions.get(drone_id)
+            if position is None or home is None:
+                self.altitude_violation_started_at.pop(drone_id, None)
+                continue
+            height_m = position[2] - home[2]
+            if height_m >= minimum_height_m:
+                self.altitude_violation_started_at.pop(drone_id, None)
+                continue
+            started_at = self.altitude_violation_started_at.setdefault(
+                drone_id,
+                now,
+            )
+            violation_s = now - started_at
+            if violation_s >= SWARM_ALTITUDE_VIOLATION_S:
+                return (
+                    f'Sustained altitude loss: {drone_id} at '
+                    f'{height_m:.3f} m above home; require at least '
+                    f'{minimum_height_m:.2f} m'
+                )
+        return None
+
     def _update_wand_group_monitor(self, now):
         """Monitor common wand control without issuing movement targets."""
         if self._all_drones_disarmed():
@@ -803,6 +916,11 @@ class SwarmNode(Node):
             if not self._positions_are_fresh():
                 self._safety_land('Wand swarm position data became stale')
                 return
+            if self._all_control_phases_are('WAND_HOVER'):
+                altitude_error = self._altitude_safety_error(now)
+                if altitude_error:
+                    self._safety_land(f'Wand {altitude_error}')
+                    return
             separation_error = self._separation_safety_error(now)
             if separation_error:
                 self._safety_land(f'Wand {separation_error}')
@@ -834,6 +952,8 @@ class SwarmNode(Node):
             self._set_state('ERROR')
 
     def _set_state(self, state):
+        if state in ('IDLE', 'TAKEOFF'):
+            self.altitude_violation_started_at.clear()
         self.swarm_state = state
         self._publish_status()
         self.get_logger().info(f'Swarm state: {state}')

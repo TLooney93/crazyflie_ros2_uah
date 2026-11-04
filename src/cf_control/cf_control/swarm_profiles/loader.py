@@ -11,6 +11,10 @@ from cf_control.swarm_profiles.five_drone_lab import (
     PROFILE as FIVE_DRONE_LAB,
     PROFILE_NAME as FIVE_DRONE_LAB_NAME,
 )
+from cf_control.swarm_profiles.three_drone_demo import (
+    PROFILE as THREE_DRONE_DEMO,
+    PROFILE_NAME as THREE_DRONE_DEMO_NAME,
+)
 from cf_control.swarm_profiles.two_drone_lab import (
     PROFILE as TWO_DRONE_LAB,
     PROFILE_NAME as TWO_DRONE_LAB_NAME,
@@ -19,6 +23,7 @@ from cf_control.swarm_profiles.two_drone_lab import (
 
 SWARM_PROFILES = {
     TWO_DRONE_LAB_NAME: TWO_DRONE_LAB,
+    THREE_DRONE_DEMO_NAME: THREE_DRONE_DEMO,
     FIVE_DRONE_LAB_NAME: FIVE_DRONE_LAB,
 }
 
@@ -78,6 +83,16 @@ def load_swarm_profile(name, require_radio_uris=False):
         raise ValueError(
             f'Swarm profile {name!r} needs a default mission_name'
         )
+
+    takeoff_height_m = profile.get('takeoff_height_m', 0.30)
+    if (
+        not isinstance(takeoff_height_m, (int, float))
+        or not 0.0 < takeoff_height_m <= 2.0
+    ):
+        raise ValueError(
+            f'Swarm profile {name!r} has an invalid takeoff_height_m'
+        )
+    profile['takeoff_height_m'] = float(takeoff_height_m)
 
     world = profile.get('simulation_world')
     if (

@@ -27,10 +27,12 @@ from cf_control.config import (
     POSITION_KI,
     POSITION_KP,
     POSITION_TIMEOUT_S,
+    PREFLIGHT_MIN_BATTERY_VOLTAGE,
     TAKEOFF_BOOST_END_HEIGHT_M,
     TAKEOFF_BOOST_M_S,
     TAKEOFF_MAX_HORIZONTAL_DEVIATION_M,
     TAKEOFF_MAX_HORIZONTAL_VELOCITY_M_S,
+    TAKEOFF_MAX_VERTICAL_VELOCITY_M_S,
     TELEMETRY_LOSS_DESCENT_S,
     TELEMETRY_PERIOD_MS,
     VALID_WAND_GESTURES,
@@ -70,13 +72,18 @@ from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from std_msgs.msg import String
+from std_msgs.msg import Float32, String
 from std_srvs.srv import Trigger
 
 
 class CrazyflieNode(Node):
 
-    def __init__(self, node_name='crazyflie_node', parameter_overrides=None):
+    def __init__(
+        self,
+        node_name='crazyflie_node',
+        parameter_overrides=None,
+        radio_dispatcher=None,
+    ):
         super().__init__(
             node_name,
             parameter_overrides=parameter_overrides,
@@ -102,6 +109,10 @@ class CrazyflieNode(Node):
         self.declare_parameter('mission_name', DEFAULT_CRAZYFLIE_MISSION)
         self.declare_parameter('flight_height_m', FLIGHT_TEST_HEIGHT_M)
         self.declare_parameter('max_flight_time_s', MAX_FLIGHT_TIME_S)
+        self.declare_parameter(
+            'preflight_min_battery_voltage',
+            PREFLIGHT_MIN_BATTERY_VOLTAGE,
+        )
         self.drone_id = self.get_parameter('drone_id').value
         self.simulation = self.get_parameter('simulation').value
         self.positioning_source = self.get_parameter(
@@ -124,6 +135,9 @@ class CrazyflieNode(Node):
         )
         self.max_flight_time_s = float(
             self.get_parameter('max_flight_time_s').value
+        )
+        self.preflight_min_battery_voltage = float(
+            self.get_parameter('preflight_min_battery_voltage').value
         )
         self.vicon_forward_rate_hz = float(
             self.get_parameter('vicon_forward_rate_hz').value
@@ -159,6 +173,14 @@ class CrazyflieNode(Node):
                 'max_flight_time_s must be a positive finite number'
             )
 
+        if (
+            not math.isfinite(self.preflight_min_battery_voltage)
+            or self.preflight_min_battery_voltage <= 0
+        ):
+            raise ValueError(
+                'preflight_min_battery_voltage must be positive and finite'
+            )
+
         radio_uri = self.get_parameter('radio_uri').value
         if (
             not self.simulation
@@ -187,7 +209,9 @@ class CrazyflieNode(Node):
         self.estimator_position_received_at = None
         self.estimator_samples = 0
         self.battery_voltage = None
+        self.battery_voltage_received_at = None
         self.attitude_degrees = None
+        self.stabilizer_thrust = None
         self.position_lock = Lock()
         self.vicon_received_at = None
         self.vicon_position = None
@@ -256,6 +280,21 @@ class CrazyflieNode(Node):
             f'/{self.drone_id}/position',
             10
         )
+        self.battery_pub = self.create_publisher(
+            Float32,
+            f'/{self.drone_id}/battery_voltage',
+            10,
+        )
+        self.thrust_pub = self.create_publisher(
+            Float32,
+            f'/{self.drone_id}/stabilizer_thrust',
+            10,
+        )
+        self.control_phase_pub = self.create_publisher(
+            String,
+            f'/{self.drone_id}/control_phase',
+            10,
+        )
 
         self.target_sub = self.create_subscription(
             Point,
@@ -307,12 +346,16 @@ class CrazyflieNode(Node):
                 self._publish_sim_velocity
             )
         else:
-            self.interface = CrazyflieInterface(self.scf)
+            self.interface = CrazyflieInterface(
+                self.scf,
+                dispatcher=radio_dispatcher,
+            )
             self.telemetry = TelemetryReader(
                 self.scf,
                 callback=self._on_position,
                 period_ms=TELEMETRY_PERIOD_MS,
                 include_attitude=True,
+                include_thrust=True,
             )
 
         self.velocity_debug_pub = self.create_publisher(
@@ -381,7 +424,7 @@ class CrazyflieNode(Node):
 
         if (
             self.flight_mode != 'external'
-            or self.test_phase != 'EXTERNAL_HOVER'
+            or self.test_phase not in ('EXTERNAL_HOVER', 'WAND_HOVER')
         ):
             self.get_logger().warning(
                 'Ignoring target: external command mode is not ready'
@@ -439,7 +482,7 @@ class CrazyflieNode(Node):
             not self.external_targets_enabled
             or self.flight_state is not FlightState.FLYING
             or self.flight_mode != 'external'
-            or self.test_phase != 'EXTERNAL_HOVER'
+            or self.test_phase not in ('EXTERNAL_HOVER', 'WAND_HOVER')
         ):
             return
 
@@ -513,6 +556,21 @@ class CrazyflieNode(Node):
                     f'{VICON_ESTIMATOR_MAX_ERROR_M:.2f} m'
                 )
 
+        if not self.simulation:
+            battery_voltage = self._fresh_battery_voltage()
+            if battery_voltage is None:
+                return self._service_failure(
+                    response,
+                    'Cannot arm without fresh battery telemetry'
+                )
+            if battery_voltage < self.preflight_min_battery_voltage:
+                return self._service_failure(
+                    response,
+                    f'Cannot arm: battery is {battery_voltage:.2f} V; '
+                    f'require at least '
+                    f'{self.preflight_min_battery_voltage:.2f} V'
+                )
+
         self.home_position = position
         self.flight_controller.clear_target()
         self.interface.arm()
@@ -566,12 +624,12 @@ class CrazyflieNode(Node):
         self.mission_phase_index = None
         self.mission_phase_arrived_at = None
         if wand_mode:
-            self.test_phase = 'WAND_TAKEOFF'
+            takeoff_phase = 'WAND_TAKEOFF'
         elif self.flight_mode == 'external':
-            self.test_phase = 'EXTERNAL_TAKEOFF'
+            takeoff_phase = 'EXTERNAL_TAKEOFF'
         else:
-            self.test_phase = 'TAKEOFF'
-        self.test_phase_started_at = self.flight_started_at
+            takeoff_phase = 'TAKEOFF'
+        self._set_test_phase(takeoff_phase, self.flight_started_at)
         self.telemetry_lost_at = None
         self._set_state(FlightState.FLYING)
         response.success = True
@@ -617,24 +675,25 @@ class CrazyflieNode(Node):
         if action == 'enable':
             if self.flight_state is FlightState.LANDING:
                 self.get_logger().warning(
-                    'Cannot enable wand control while landing'
+                    'Cannot enable wand gesture capture while landing'
                 )
                 return
             self.wand_active = True
             self.wand_reference_orientation = self.wand_orientation
             self.wand_last_move_at = None
-            if self.flight_state is FlightState.FLYING:
-                self._enter_wand_hover('Wand control enabled')
             self.get_logger().info(
-                'Wand enabled; hold it level to establish neutral orientation'
+                'Wand gesture capture enabled; hold it level to establish '
+                'neutral orientation'
             )
             return
 
         if action == 'disable':
             self.wand_active = False
             self.wand_reference_orientation = None
-            if self.flight_state is FlightState.FLYING:
-                self._hold_current_position('Wand disabled; holding position')
+            self.wand_last_move_at = None
+            self.get_logger().info(
+                'Wand gesture capture disabled; active flight target retained'
+            )
             return
 
         if not self.wand_active:
@@ -773,14 +832,9 @@ class CrazyflieNode(Node):
             return False
         self.test_feedforward = (0.0, 0.0, 0.0)
         self.flight_controller.set_target(*position)
-        self.test_phase = 'WAND_HOVER'
+        self._set_test_phase('WAND_HOVER', time.monotonic())
         self.get_logger().warning(reason)
         return True
-
-    def _enter_wand_hover(self, reason):
-        """Stop the autonomous path and hold before accepting wand motion."""
-        if self._hold_current_position(reason):
-            self.test_phase = 'WAND_HOVER'
 
     def land_callback(self, request, response):
         """Begin a controlled landing, or disarm if takeoff never started."""
@@ -840,6 +894,7 @@ class CrazyflieNode(Node):
                 'Lighthouse estimator forwarding disabled; '
                 'waiting for Vicon poses'
             )
+        self.interface.start()
         self.telemetry.start()
 
     def _on_vicon_pose(self, msg):
@@ -967,11 +1022,23 @@ class CrazyflieNode(Node):
 
         raw_rate = self.vicon_raw_samples / elapsed
         forward_rate = self.vicon_forwarded_samples / elapsed
+        radio_text = ''
+        if isinstance(self.interface, CrazyflieInterface):
+            statistics = self.interface.consume_send_statistics()
+            radio_text = (
+                f'; cflib handoff velocity '
+                f'{statistics["velocity"] / elapsed:.1f} Hz, '
+                f'extpos '
+                f'{statistics["external_position"] / elapsed:.1f} Hz'
+            )
+            if statistics['error']:
+                radio_text += f'; send error {statistics["error"]}'
         with self.position_lock:
             estimator_rate = self.estimator_samples / elapsed
             estimator_received_at = self.estimator_position_received_at
             battery_voltage = self.battery_voltage
             attitude_degrees = self.attitude_degrees
+            stabilizer_thrust = self.stabilizer_thrust
             self.estimator_samples = 0
         estimator_age = (
             received_at - estimator_received_at
@@ -986,11 +1053,13 @@ class CrazyflieNode(Node):
                 f'pitch={attitude_degrees[1]:.1f}, '
                 f'yaw={attitude_degrees[2]:.1f} deg'
             )
+        if stabilizer_thrust is not None:
+            health_text += f'; thrust {stabilizer_thrust:.1f}'
         self.get_logger().info(
             f'Vicon rates: input {raw_rate:.1f} Hz, '
             f'forwarded {forward_rate:.1f} Hz; '
             f'estimator telemetry {estimator_rate:.1f} Hz, '
-            f'age {estimator_age:.2f} s{health_text}'
+            f'age {estimator_age:.2f} s{health_text}{radio_text}'
         )
         self.vicon_rate_window_started_at = received_at
         self.vicon_raw_samples = 0
@@ -1005,6 +1074,9 @@ class CrazyflieNode(Node):
 
         valid = all(math.isfinite(value) for value in position)
         battery_voltage = float(data.get('pm.vbat', float('nan')))
+        stabilizer_thrust = float(
+            data.get('stabilizer.thrust', float('nan'))
+        )
         attitude = tuple(
             float(data.get(name, float('nan')))
             for name in (
@@ -1023,11 +1095,29 @@ class CrazyflieNode(Node):
             self.battery_voltage = (
                 battery_voltage if math.isfinite(battery_voltage) else None
             )
+            self.battery_voltage_received_at = (
+                received_at if math.isfinite(battery_voltage) else None
+            )
             self.attitude_degrees = (
                 attitude
                 if all(math.isfinite(value) for value in attitude)
                 else None
             )
+            self.stabilizer_thrust = (
+                stabilizer_thrust
+                if math.isfinite(stabilizer_thrust)
+                else None
+            )
+
+        if math.isfinite(battery_voltage):
+            message = Float32()
+            message.data = battery_voltage
+            self.battery_pub.publish(message)
+
+        if math.isfinite(stabilizer_thrust):
+            message = Float32()
+            message.data = stabilizer_thrust
+            self.thrust_pub.publish(message)
 
         if self.simulation or self.positioning_source != 'vicon':
             self._store_position(position, received_at)
@@ -1192,7 +1282,15 @@ class CrazyflieNode(Node):
             )
         vx = max(-MAX_VELOCITY, min(vx, MAX_VELOCITY))
         vy = max(-MAX_VELOCITY, min(vy, MAX_VELOCITY))
-        vz = max(-MAX_VELOCITY, min(vz, MAX_VELOCITY))
+        vertical_velocity_limit = (
+            TAKEOFF_MAX_VERTICAL_VELOCITY_M_S
+            if takeoff_active
+            else MAX_VELOCITY
+        )
+        vz = max(
+            -MAX_VELOCITY,
+            min(vz, vertical_velocity_limit),
+        )
         if takeoff_active:
             vx, vy = limit_horizontal_velocity(
                 vx,
@@ -1215,7 +1313,7 @@ class CrazyflieNode(Node):
         flight_z = floor_z + takeoff_height_m
 
         if self.test_phase == 'EXTERNAL_TAKEOFF':
-            if self._near(position, (home_x, home_y, flight_z)):
+            if self._takeoff_height_reached(position, flight_z):
                 self.flight_controller.set_target(home_x, home_y, flight_z)
                 self._set_test_phase('EXTERNAL_HOVER', now)
             return
@@ -1224,7 +1322,7 @@ class CrazyflieNode(Node):
             return
 
         if self.test_phase == 'WAND_TAKEOFF':
-            if self._near(position, (home_x, home_y, flight_z)):
+            if self._takeoff_height_reached(position, flight_z):
                 self.flight_controller.set_target(home_x, home_y, flight_z)
                 self._set_test_phase('WAND_HOVER', now)
             return
@@ -1324,11 +1422,25 @@ class CrazyflieNode(Node):
     def _set_test_phase(self, phase, now):
         self.test_phase = phase
         self.test_phase_started_at = now
+        self._publish_control_phase()
         self.get_logger().info(f'Flight test phase: {phase}')
 
     @staticmethod
     def _near(position, target):
         return math.dist(position, target) <= FLIGHT_TEST_POSITION_TOLERANCE_M
+
+    def _takeoff_height_reached(self, position, flight_z):
+        """Require target altitude while separately enforcing launch column."""
+        horizontal_deviation_m = math.hypot(
+            position[0] - self.home_position[0],
+            position[1] - self.home_position[1],
+        )
+        return (
+            abs(position[2] - flight_z)
+            <= FLIGHT_TEST_POSITION_TOLERANCE_M
+            and horizontal_deviation_m
+            <= TAKEOFF_MAX_HORIZONTAL_DEVIATION_M
+        )
 
     def _fresh_position(self):
         with self.position_lock:
@@ -1356,6 +1468,20 @@ class CrazyflieNode(Node):
         ):
             return None
         return position
+
+    def _fresh_battery_voltage(self):
+        """Return recent hardware battery voltage for the arming gate."""
+        with self.position_lock:
+            voltage = self.battery_voltage
+            received_at = self.battery_voltage_received_at
+
+        if (
+            voltage is None
+            or received_at is None
+            or time.monotonic() - received_at > POSITION_TIMEOUT_S
+        ):
+            return None
+        return voltage
 
     def _positioning_source_is_ready(self):
         if self.simulation or self.positioning_source == 'lighthouse':
@@ -1396,6 +1522,7 @@ class CrazyflieNode(Node):
         self.flight_controller.clear_target()
         self.flight_started_at = None
         self.test_phase = None
+        self._publish_control_phase()
         self.test_phase_started_at = None
         self.mission_phase_index = None
         self.mission_phase_arrived_at = None
@@ -1424,7 +1551,16 @@ class CrazyflieNode(Node):
         msg = String()
         msg.data = self.flight_state.name
         self.state_pub.publish(msg)
+        self._publish_control_phase()
         self.last_state_published_at = time.monotonic()
+
+    def _publish_control_phase(self):
+        """Publish the controller sub-state used for swarm handshakes."""
+        if not hasattr(self, 'control_phase_pub'):
+            return
+        msg = String()
+        msg.data = self.test_phase or 'IDLE'
+        self.control_phase_pub.publish(msg)
 
     @staticmethod
     def _service_failure(response, message):
@@ -1439,6 +1575,8 @@ class CrazyflieNode(Node):
             if self.flight_state is not FlightState.DISARMED:
                 self._stop_and_disarm('Node disconnecting')
         finally:
+            if isinstance(self.interface, CrazyflieInterface):
+                self.interface.shutdown()
             if self.telemetry is not None:
                 self.telemetry.stop()
             if self.scf is not None:

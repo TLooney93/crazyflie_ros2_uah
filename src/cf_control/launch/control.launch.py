@@ -128,13 +128,17 @@ def _build_nodes(context):
             )
     nodes = []
     wand_enabled = input_mode == 'wand'
-    external_enabled = input_mode == 'terminal' or (
-        mode == 'swarm' and not wand_enabled
-    )
+    # Swarm controllers accept coordinator targets in every swarm mode. In
+    # wand mode these remain unused until the guarded side-to-side gesture
+    # starts the selected saved mission from a stable group hover.
+    external_enabled = input_mode == 'terminal' or mode == 'swarm'
     flight_mode = (
         'external'
         if external_enabled or wand_enabled
         else 'autonomous'
+    )
+    takeoff_height_m = (
+        profile['takeoff_height_m'] if profile is not None else 0.30
     )
 
     use_shared_runner = mode == 'swarm' or (
@@ -162,6 +166,7 @@ def _build_nodes(context):
                         if mode == 'swarm'
                         else 35.0
                     ),
+                    'flight_height_m': takeoff_height_m,
                     'mission_name': (
                         mission_name
                         if mode == 'single'
@@ -216,6 +221,9 @@ def _build_nodes(context):
                     'drone_ids': drone_ids,
                     'mission_name': mission_name,
                     'wand_group_mode': input_mode == 'wand',
+                    'takeoff_height_m': (
+                        takeoff_height_m
+                    ),
                 }],
                 output='screen',
             )

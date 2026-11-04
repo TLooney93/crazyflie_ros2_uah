@@ -13,11 +13,13 @@ class TelemetryReader:
         callback,
         period_ms=100,
         include_attitude=False,
+        include_thrust=False,
     ):
         self.scf = scf
         self.callback = callback
         self.period_ms = period_ms
         self.include_attitude = include_attitude
+        self.include_thrust = include_thrust
         self._samples = Queue(maxsize=1)
 
         self.running = False
@@ -83,6 +85,10 @@ class TelemetryReader:
             log_config.add_variable('stabilizer.roll', 'FP16')
             log_config.add_variable('stabilizer.pitch', 'FP16')
             log_config.add_variable('stabilizer.yaw', 'FP16')
+        if self.include_thrust:
+            # FP16 keeps this signal in the existing telemetry packet instead
+            # of creating another radio log stream.
+            log_config.add_variable('stabilizer.thrust', 'FP16')
         self.scf.cf.log.add_config(log_config)
         log_config.data_received_cb.add_callback(self._on_log_data)
 

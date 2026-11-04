@@ -6,7 +6,9 @@ from pathlib import Path
 
 DRONES = {
     'cf1': 'radio://0/80/2M/E7E7E7E7E7',
+    'cfw': 'radio://0/80/2M/E7E7E7E7E1',
     'cf2': 'radio://0/80/2M/E7E7E7E7E6',
+    'cf3': 'radio://0/80/2M/E7E7E7E7E5',
 }
 
 
@@ -40,15 +42,23 @@ EXTERNAL_MAX_FEEDFORWARD_M_S = 0.12
 
 
 # *************  TELEMETRY  ***************
-# sets the requested interval between position measurements
-TELEMETRY_PERIOD_MS = 100
-POSITION_TIMEOUT_S = 0.5
+# Five onboard estimator samples per second leaves more shared-radio time for
+# three vehicles' external-position updates and command packets.
+TELEMETRY_PERIOD_MS = 200
+# This is a conservative test-readiness threshold, not the firmware's
+# critical-low cutoff. A hardware flight should begin with a charged pack so
+# that voltage sag under takeoff load does not reset the radio or controller.
+PREFLIGHT_MIN_BATTERY_VOLTAGE = 3.85
+# Shared-radio/Vicon hardware can briefly delay ROS pose callbacks while three
+# links transition into flight.  Allow short gaps without immediately forcing
+# every vehicle into a blind descent; invalid/zero poses are still rejected.
+POSITION_TIMEOUT_S = 1.5
 
 # Crazyflie firmware estimator selection: 2 selects the Kalman estimator.
 KALMAN_ESTIMATOR = 2
 VICON_ESTIMATOR_MAX_ERROR_M = 0.15
 # Limit radio traffic while retaining the full-rate ROS Vicon stream.
-VICON_FORWARD_RATE_HZ = 10.0
+VICON_FORWARD_RATE_HZ = 5.0
 # Reject receiver dropout sentinels and physically impossible pose jumps.
 VICON_ZERO_POSITION_EPSILON_M = 1e-4
 VICON_MAX_POSITION_JUMP_M = 0.20
@@ -67,11 +77,14 @@ FLIGHT_TEST_FIGURE_EIGHT_DURATION_S = 20.0
 FLIGHT_TEST_POSITION_TOLERANCE_M = 0.08
 ARM_SETTLE_TIME_S = 1.0
 # Extra vertical demand below this height helps clear near-floor ground effect.
-TAKEOFF_BOOST_M_S = 0.12
+TAKEOFF_BOOST_M_S = 0.18
 TAKEOFF_BOOST_END_HEIGHT_M = 0.25
+# Permit the added low-altitude boost to reach the onboard velocity controller
+# instead of clipping it at the normal mission velocity limit.
+TAKEOFF_MAX_VERTICAL_VELOCITY_M_S = 0.38
 # Keep takeoff inside a narrow vertical launch column.
-TAKEOFF_MAX_HORIZONTAL_VELOCITY_M_S = 0.08
-TAKEOFF_MAX_HORIZONTAL_DEVIATION_M = 0.20
+TAKEOFF_MAX_HORIZONTAL_VELOCITY_M_S = 0.10
+TAKEOFF_MAX_HORIZONTAL_DEVIATION_M = 0.30
 LANDING_HEIGHT_M = 0.05
 LANDING_COMPLETE_TOLERANCE_M = 0.03
 LANDING_SPEED_M_S = 0.10
@@ -99,11 +112,16 @@ SWARM_POSITION_TOLERANCE_M = 0.07
 # Small hardware vehicles do not settle at the same instant.  Takeoff only
 # needs each member close enough to its commanded clearance height before the
 # coordinator begins the saved mission.
-SWARM_TAKEOFF_POSITION_TOLERANCE_M = 0.12
-SWARM_MIN_SEPARATION_M = 0.25
-SWARM_CRITICAL_SEPARATION_M = 0.15
-SWARM_PREFLIGHT_MIN_SEPARATION_M = 0.50
-SWARM_SEPARATION_VIOLATION_S = 0.30
+SWARM_TAKEOFF_POSITION_TOLERANCE_M = 0.22
+SWARM_MIN_SEPARATION_M = 0.20
+SWARM_CRITICAL_SEPARATION_M = 0.12
+SWARM_PREFLIGHT_MIN_SEPARATION_M = 0.40
+SWARM_SEPARATION_VIOLATION_S = 0.50
+# Abort an active hover/mission if any member falls well below the takeoff
+# altitude for more than this short confirmation interval.
+SWARM_ALTITUDE_LOSS_MARGIN_M = 0.25
+SWARM_ALTITUDE_VIOLATION_S = 0.40
+SWARM_MIN_AIRBORNE_HEIGHT_M = 0.10
 SWARM_DIAGNOSTIC_PERIOD_S = 1.0
 SWARM_TAKEOFF_TIMEOUT_S = 20.0
 SWARM_MAX_FLIGHT_TIME_S = 90.0

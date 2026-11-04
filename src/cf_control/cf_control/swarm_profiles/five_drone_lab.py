@@ -15,8 +15,8 @@ PROFILE = {
         'cf5': '/vicon/cf5/cf5',
     },
     'radio_uris': {
-        'cf1': DRONES['cf1'],
-        'cf2': DRONES['cf2'],
+        'cf1': DRONES.get('cf1', ''),
+        'cf2': DRONES.get('cf2', ''),
         # Fill these with the actual addresses after radio scanning.
         'cf3': '',
         'cf4': '',

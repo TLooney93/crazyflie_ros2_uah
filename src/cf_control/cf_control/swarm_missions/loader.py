@@ -3,8 +3,8 @@ Registry and validation for saved swarm missions.
 
 ``offsets`` are meters relative to each drone's arming position.
 ``formation_targets`` are along/across coordinates relative to the measured
-midpoint and cf1-to-cf2 launch baseline. ``trajectory`` defines a continuous
-two-drone formation path. To register a mission, import its ``MISSION_NAME``
+launch-line center and first-to-last drone baseline. ``trajectory`` defines a
+continuous formation path. To register a mission, import its ``MISSION_NAME``
 and ``MISSION`` below and add that pair to ``SWARM_MISSIONS``.
 """
 
@@ -19,6 +19,10 @@ from cf_control.swarm_missions.five_drone_demo import (
     MISSION as FIVE_DRONE_DEMO,
     MISSION_NAME as FIVE_DRONE_DEMO_NAME,
 )
+from cf_control.swarm_missions.three_drone_demo import (
+    MISSION as THREE_DRONE_DEMO,
+    MISSION_NAME as THREE_DRONE_DEMO_NAME,
+)
 from cf_control.swarm_missions.two_drone_demo import (
     MISSION as TWO_DRONE_DEMO,
     MISSION_NAME as TWO_DRONE_DEMO_NAME,
@@ -32,6 +36,7 @@ from cf_control.swarm_missions.two_drone_lab import (
 SWARM_MISSIONS = {
     TWO_DRONE_LAB_NAME: TWO_DRONE_LAB,
     TWO_DRONE_DEMO_NAME: TWO_DRONE_DEMO,
+    THREE_DRONE_DEMO_NAME: THREE_DRONE_DEMO,
     FIVE_DRONE_DEMO_NAME: FIVE_DRONE_DEMO,
 }
 
@@ -75,13 +80,6 @@ def load_swarm_mission(name, drone_ids):
                 f'Phase {phase_name!r} {coordinate_name} must exactly match '
                 f'{sorted(expected_ids)}'
             )
-        if (
-            formation_targets is not None or trajectory is not None
-        ) and len(requested_ids) != 2:
-            raise ValueError(
-                'formation targets and trajectories require exactly two drones'
-            )
-
         hold_s = phase.get('hold_s')
         if not isinstance(hold_s, (int, float)) or not math.isfinite(hold_s):
             raise ValueError(f'Phase {phase_name!r} hold_s must be finite')

@@ -84,6 +84,7 @@ def _build_simulation(context):
                 'wand_control_enabled': wand_enabled,
                 'wand_mission_gestures_enabled': False,
                 'max_flight_time_s': 90.0,
+                'flight_height_m': profile['takeoff_height_m'],
             }],
             output='screen',
         )
@@ -97,6 +98,7 @@ def _build_simulation(context):
             'drone_ids': drone_ids,
             'mission_name': mission_name,
             'wand_group_mode': wand_enabled,
+            'takeoff_height_m': profile['takeoff_height_m'],
             'use_sim_time': True,
         }],
         output='screen',
