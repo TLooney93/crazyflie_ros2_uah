@@ -2,7 +2,8 @@
 
 This document is the command-first reference for building, simulating, and
 running the Crazyflie project. For the detailed Vicon flight checklist, use
-`FLIGHT_TEST_REFERENCE.md`.
+`FLIGHT_TEST_REFERENCE.md`. For process ownership and data flow, use
+`ARCHITECTURE.md`.
 
 ## Safety rules
 
@@ -65,7 +66,7 @@ cfvicon 192.168.10.1 vicon
 | `cfws` | none | Change to the ROS workspace. |
 | `cfbuild` | optional `colcon build` arguments | Build `cf_control` and `cf_gazebo`, then source the result. |
 | `cftest` | optional `colcon test` arguments | Run the focused controller, mission, interface, wand, and swarm tests. |
-| `cfcheck` | optional `colcon test` arguments | Run the complete `cf_control` suite, including legacy lint checks. |
+| `cfchecktests` | optional `colcon test` arguments | Run the complete `cf_control` suite, including legacy lint checks. |
 | `cfsource` | none | Re-source `install/setup.bash` after an external build. |
 | `cfgazebo` | `[gui\|headless]` | Start only the Gazebo world. It does not start the bridge or controller. |
 | `cfsim` | `[gui\|headless] [autonomous\|terminal\|wand] [mission]` | Start the complete single-drone Gazebo stack in the selected mode. |
@@ -98,9 +99,9 @@ cfvicon 192.168.10.1 vicon
 | `cfswarmstop` | none | Request immediate stop/disarm from every swarm member. |
 | `cfswarmstate` | none | Continuously display the coordinator state. |
 
-`cfcheck` currently includes older example files that have existing style and
+`cfchecktests` currently includes older example files that have existing style and
 incomplete-code warnings. Use `cftest` as the focused regression test for the
-active flight stack, and review `cfcheck` output separately.
+active flight stack, and review `cfchecktests` output separately.
 
 ## Three-drone battery and link qualification
 
@@ -120,7 +121,7 @@ ros2 topic echo /cf2/battery_voltage
 ros2 topic echo /cf3/battery_voltage
 ```
 
-The hardware arming gate requires fresh battery telemetry at or above 4.00 V
+The hardware arming gate requires fresh battery telemetry at or above 3.85 V
 for every drone. This intentionally conservative threshold is for beginning a
 test with charged packs; it is not the firmware's critical-low cutoff. Also
 confirm that the launch terminal continues to report estimator telemetry near
@@ -134,11 +135,13 @@ to a staged takeoff and hover over the net, and compare the three live voltage
 topics for a sudden drop or reboot before running a saved mission.
 
 The `three_drone_demo` profile takes off directly to its 0.45 m mission
-height. High-rate external-position and velocity updates use bounded
-latest-value slots in one shared priority dispatcher. It refreshes every
-drone's velocity before sending external-position updates, preventing one link
-from replaying old commands or allowing pose traffic to jump ahead of flight
-setpoints. Arm, land, and emergency-stop commands remain direct.
+height. The shared dispatcher takes a snapshot of every drone's latest
+velocity every 20 ms (50 Hz), sends all three addressed command packets, and
+then sends pending external-position updates. Stock Crazyflie firmware still
+uses one over-air packet per drone; the dispatcher makes those packets one
+ordered group frame. A velocity that is not renewed for 100 ms expires rather
+than being replayed indefinitely. Arm, land, and emergency-stop commands
+remain direct.
 
 The coordinator does not enter `HOVER` or begin the mission until every
 controller publishes `EXTERNAL_HOVER` on its control-phase topic. During hover
@@ -219,7 +222,7 @@ Run the complete package suite when cleaning up project-wide style or legacy
 tools:
 
 ```bash
-cfcheck
+cfchecktests
 ```
 
 ## Test 2: Gazebo world only
@@ -537,8 +540,8 @@ Creating publisher for segment cf231 from subject cf231
 source /opt/ros/jazzy/setup.bash
 source ~/vicon_receiver_ws/install/setup.bash
 ros2 topic list | grep vicon
-ros2 topic type /vicon/cf231/cf231
-ros2 topic hz /vicon/cf231/cf231
+ros2 topic type /vicon/cf1/cf1
+ros2 topic hz /vicon/cf1/cf1
 ```
 
 Expected type:
@@ -550,7 +553,7 @@ geometry_msgs/msg/PoseStamped
 Inspect coordinates:
 
 ```bash
-ros2 topic echo /vicon/cf231/cf231
+ros2 topic echo /vicon/cf1/cf1
 ```
 
 Move the unpowered receiver drone by hand and verify smooth X, Y, and Z motion
@@ -572,7 +575,7 @@ cfvicon 192.168.10.1 vicon
 ```bash
 cfenv
 cfbuild
-cfsingle cf1 vicon /vicon/cf231/cf231
+cfsingle cf1 vicon /vicon/cf1/cf1
 ```
 
 Do not arm until the node reports:
@@ -779,7 +782,7 @@ cfswarmsim headless five_drone_lab
 
 The expected phases are `HOVER`, `FORWARD`, and `RETURN_HOME`.
 
-### Three-drone line and triangle demo
+### Three-drone conservative hover test
 
 Build and run the dedicated three-drone world:
 
@@ -796,8 +799,9 @@ cfenv
 cfswarmstart
 ```
 
-Expected mission phases are `INITIAL_HOVER`, `TRIANGLE_ENTRY`, and
-`TRIANGLE_ORBIT`. The coordinator then requests landing automatically.
+The current hardware-baseline mission contains one `HOVER` phase at 0.30 m,
+held for 5 seconds before coordinated landing. Expand this mission only after
+all three vehicles complete the hover test cleanly.
 Hardware use reads the three unique radio
 URIs for `cf1`, `cf2`, and `cf3` from `cf_control/config.py`.
 
@@ -822,12 +826,20 @@ cfbuild
 cfswarm two_drone_lab autonomous vicon
 ```
 
-During takeoff, each controller adds a bounded `0.18 m/s` vertical boost below
-`0.25 m` above its recorded floor position. Takeoff alone may command up to
-`0.38 m/s` vertically so this boost is not clipped; the normal mission limit
-remains `0.30 m/s`. Horizontal takeoff correction is limited to `0.10 m/s`,
-and leaving a `0.30 m` launch column still initiates landing. The swarm allows
-20 seconds for all drones to reach within `0.22 m` of takeoff height. A timeout reports each
+During takeoff, each controller adds a `0.50 m/s` vertical boost below
+`0.25 m` above its recorded floor position. The combined controller and boost
+command may use a `0.50 m/s` cap during the first three seconds, then returns
+to the normal `0.40 m/s` takeoff cap. During this three-second heavy-airframe
+assist window, stalled-climb and sustained-thrust timers do not accumulate;
+the normal four-second progress window and two-second thrust window begin
+after assistance ends. Horizontal correction is limited to
+`0.01 m/s` in the first 0.10 m and `0.04 m/s` above it; leaving a `0.30 m`
+launch column still initiates landing even during assistance. Position-source
+freshness, emergency stop, and maximum flight time also remain active. After
+the assist window, a vehicle must gain 0.05 m within four seconds, and a raw
+thrust demand at or above 60000 for two seconds without that progress initiates
+landing. The swarm allows 20 seconds for all drones to
+reach within `0.40 m` of takeoff height. A timeout reports each
 drone's measured height and state. During a mission, each drone's waypoint
 arrival is latched independently so natural motion does not require every
 vehicle to occupy its tolerance sphere on the same control sample.
@@ -841,7 +853,7 @@ shared-Crazyradio bandwidth for commands and return telemetry. Expect periodic
 messages similar to:
 
 ```text
-Vicon rates: input 100.0 Hz, forwarded 4.5-5.0 Hz; estimator telemetry 5.0 Hz, age 0.10 s; cflib handoff velocity 20.0 Hz, extpos 5.0 Hz
+Vicon rates: input 100.0 Hz, forwarded 4.5-5.0 Hz; estimator telemetry 5.0 Hz, age 0.10 s; cflib handoff velocity 50.0 Hz, extpos 5.0 Hz
 ```
 
 Wait for every Vicon-ready message. Verify each position stream separately:
@@ -987,7 +999,7 @@ Start the Vicon-controlled node with wand input disabled:
 ros2 run cf_control crazyflie_node --ros-args \
   -p drone_id:=cf1 \
   -p positioning_source:=vicon \
-  -p vicon_pose_topic:=/vicon/cf231/cf231 \
+  -p vicon_pose_topic:=/vicon/cf1/cf1 \
   -p wand_control_enabled:=false \
   -p flight_mode:=autonomous \
   -p external_targets_enabled:=false

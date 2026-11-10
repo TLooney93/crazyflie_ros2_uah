@@ -9,7 +9,7 @@ MISSION = [
     {
         'name': 'HOVER',
         'kind': 'waypoint',
-        'offset': (0.0, 0.0, FLIGHT_TEST_HEIGHT_M),
+        'offset': (0.0, 0.0, 0.3),
         'hold_s': 5.0,
     },
 ]

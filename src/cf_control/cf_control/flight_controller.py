@@ -1,27 +1,8 @@
-import math
-
-
-def ground_effect_takeoff_boost(
-    height_above_floor_m,
-    boost_end_height_m,
-    boost_m_s,
-):
-    """Return a bounded vertical boost while the vehicle is near the floor."""
-    if height_above_floor_m < boost_end_height_m:
-        return boost_m_s
-    return 0.0
-
-
-def limit_horizontal_velocity(vx, vy, max_velocity):
-    """Limit horizontal speed while preserving the requested direction."""
-    speed = math.hypot(vx, vy)
-    if speed <= max_velocity or speed == 0.0:
-        return vx, vy
-    scale = max_velocity / speed
-    return vx * scale, vy * scale
+"""Bounded position controller used by hardware and simulation."""
 
 
 class FlightController:
+    """Bounded PI position controller shared by hardware and simulation."""
 
     def __init__(
         self,
@@ -30,6 +11,7 @@ class FlightController:
         ki=0.0,
         integral_max_velocity=0.0,
     ):
+        """Create a controller with bounded proportional/integral output."""
         self.kp = kp
         self.ki = ki
         self.max_velocity = max_velocity
@@ -39,6 +21,7 @@ class FlightController:
         self.integral_error = [0.0, 0.0, 0.0]
 
     def set_target(self, x, y, z):
+        """Set an absolute position target and reset changed integrators."""
         target = (x, y, z)
         if self.target is None:
             self.integral_error = [0.0, 0.0, 0.0]
@@ -51,11 +34,12 @@ class FlightController:
         self.target = target
 
     def clear_target(self):
+        """Remove the active target and accumulated integral error."""
         self.target = None
         self.integral_error = [0.0, 0.0, 0.0]
 
     def update(self, current_position, dt_s=0.0):
-
+        """Return a bounded XYZ velocity for the current position."""
         if self.target is None:
             return 0.0, 0.0, 0.0
 

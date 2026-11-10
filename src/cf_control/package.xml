@@ -3,7 +3,7 @@
 <package format="3">
   <name>cf_control</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>ROS 2 control, swarm coordination, and wand input for Crazyflie vehicles.</description>
   <maintainer email="tannerlooney@gmail.com">tanner-looney</maintainer>
   <license>TODO: License declaration</license>
 

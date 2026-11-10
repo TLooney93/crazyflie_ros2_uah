@@ -55,7 +55,7 @@ def test_three_drone_profile_selects_matching_mission_and_world():
 
     assert profile['drone_ids'] == ['cf1', 'cf2', 'cf3']
     assert profile['mission_name'] == 'three_drone_demo'
-    assert profile['takeoff_height_m'] == 0.45
+    assert profile['takeoff_height_m'] == 0.30
     assert profile['simulation_world'] == 'crazyflie_three_swarm_world.sdf'
     assert profile['vicon_topics']['cf3'] == '/vicon/cf3/cf3'
     assert load_swarm_mission(

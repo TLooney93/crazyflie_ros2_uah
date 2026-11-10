@@ -3,6 +3,8 @@
 Use this reference when adding a new single-drone mission, swarm mission, or
 swarm vehicle profile. Mission and profile names are selected at launch time;
 the controller and coordinator state machines normally do not need editing.
+See `ARCHITECTURE.md` for process ownership and `LAUNCH_TEST_REFERENCE.md` for
+the commands that select these files.
 
 ## File locations
 
@@ -176,7 +178,7 @@ Hardware with the configured `cf1` radio URI:
 
 ```bash
 cfenv
-cfsingle cf1 vicon /vicon/cf231/cf231 "" my_mission
+cfsingle cf1 vicon /vicon/cf1/cf1 "" my_mission
 ```
 
 The fourth `cfsingle` argument is an optional radio URI override. The fifth is

@@ -20,6 +20,7 @@ from cf_control.config import (
     SWARM_SEPARATION_VIOLATION_S,
     SWARM_TAKEOFF_POSITION_TOLERANCE_M,
     SWARM_TAKEOFF_TIMEOUT_S,
+    SWARM_UNCOMMANDED_MOTION_M,
     WAND_GESTURE_TOPIC,
 )
 from cf_control.swarm_missions import load_swarm_mission
@@ -182,6 +183,13 @@ class SwarmNode(Node):
         self.last_diagnostic_logged_at = 0.0
         self.separation_violation_started_at = None
         self.altitude_violation_started_at = {}
+        self.mission_active_drones = set()
+        self.phase_transition_drones = set()
+        self.staged_mission = any(
+            set(phase.get('active_drones', self.drone_ids))
+            != set(self.drone_ids)
+            for phase in self.mission
+        )
 
         self.control_timer = self.create_timer(
             1.0 / SWARM_CONTROL_RATE_HZ,
@@ -261,6 +269,8 @@ class SwarmNode(Node):
         self.home_positions = dict(self.positions)
         self.run_full_sequence = True
         self.sequence_started_at = time.monotonic()
+        if self.staged_mission:
+            self.phase_index = 0
         self._dispatch_action('arm', 'ARMING')
         return self._service_success(
             response,
@@ -354,9 +364,22 @@ class SwarmNode(Node):
         self._publish_periodic_status(now)
         self._log_flight_diagnostics(now)
 
+        if self.staged_mission and self.run_full_sequence:
+            self._publish_staged_transition_heartbeat()
+
         if self.pending_action is not None:
             self._check_pending_action(now)
             return
+
+        if self.staged_mission and self.run_full_sequence:
+            motion_error = self._uncommanded_motion_error()
+            if motion_error:
+                self.get_logger().error(motion_error)
+                self.run_full_sequence = False
+                self._dispatch_action('stop', 'STOPPING')
+                return
+            if self._update_staged_transition(now):
+                return
 
         if self.wand_group_mode and self.swarm_state != 'MISSION':
             self._update_wand_group_monitor(now)
@@ -376,7 +399,11 @@ class SwarmNode(Node):
                 return
             aborted = [
                 drone_id
-                for drone_id in self.drone_ids
+                for drone_id in (
+                    self.mission_active_drones
+                    if self.staged_mission
+                    else self.drone_ids
+                )
                 if self.drone_states.get(drone_id)
                 in ('LANDING', 'DISARMED')
             ]
@@ -475,8 +502,12 @@ class SwarmNode(Node):
             for drone_id in self.drone_ids
         )
 
-    def _dispatch_action(self, action, next_state, active_only=False):
-        drone_ids = self.drone_ids
+    def _dispatch_action(
+        self, action, next_state, active_only=False, drone_ids=None,
+    ):
+        drone_ids = list(
+            self.drone_ids if drone_ids is None else drone_ids
+        )
         if active_only:
             drone_ids = [
                 drone_id
@@ -521,12 +552,24 @@ class SwarmNode(Node):
 
         if action == 'arm':
             self.action_started_at = now
-            self._set_state('ARM_SETTLE')
+            self._set_state(
+                'PHASE_ARM_SETTLE'
+                if self.staged_mission and self.run_full_sequence
+                else 'ARM_SETTLE'
+            )
         elif action == 'takeoff':
             self.action_started_at = now
-            self._set_state('TAKEOFF')
+            self._set_state(
+                'PHASE_TAKEOFF'
+                if self.staged_mission and self.run_full_sequence
+                else 'TAKEOFF'
+            )
         elif action == 'land':
-            self._set_state('LANDING')
+            self._set_state(
+                'PHASE_LANDING'
+                if self.staged_mission and self.run_full_sequence
+                else 'LANDING'
+            )
         elif action == 'stop':
             self._set_state('STOPPING')
 
@@ -539,7 +582,7 @@ class SwarmNode(Node):
         else:
             self._set_state('ERROR')
 
-    def _all_at_takeoff_height(self):
+    def _all_at_takeoff_height(self, drone_ids=None):
         if not self.home_positions:
             return False
         return all(
@@ -553,14 +596,14 @@ class SwarmNode(Node):
                     + self.takeoff_height_m,
                 ),
             ) <= SWARM_TAKEOFF_POSITION_TOLERANCE_M
-            for drone_id in self.drone_ids
+            for drone_id in (drone_ids or self.drone_ids)
         )
 
-    def _all_control_phases_are(self, expected):
+    def _all_control_phases_are(self, expected, drone_ids=None):
         """Return whether every controller acknowledged the same sub-state."""
         return all(
             self.control_phases.get(drone_id) == expected
-            for drone_id in self.drone_ids
+            for drone_id in (drone_ids or self.drone_ids)
         )
 
     def _takeoff_progress_summary(self):
@@ -579,6 +622,151 @@ class SwarmNode(Node):
                 f'{drone_id}={height}, state={state}, phase={control_phase}'
             )
         return '; '.join(progress)
+
+    def _transition_to_mission_phase(self):
+        """Land, arm, and launch only the members requested by a phase."""
+        if self.phase_index >= len(self.mission):
+            cleanup_drones = {
+                item for item in self.drone_ids
+                if self.drone_states.get(item) != 'DISARMED'
+            }
+            if cleanup_drones:
+                self.phase_transition_drones = cleanup_drones
+                self._dispatch_action(
+                    'land', 'PHASE_LANDING',
+                    drone_ids=self.phase_transition_drones,
+                )
+            else:
+                self.run_full_sequence = False
+                self._set_state('IDLE')
+            return
+
+        desired = set(self.mission[self.phase_index]['active_drones'])
+        to_land = self.mission_active_drones - desired
+        if to_land:
+            self.phase_transition_drones = to_land
+            self._dispatch_action(
+                'land', 'PHASE_LANDING', drone_ids=to_land,
+            )
+            return
+
+        to_launch = desired - self.mission_active_drones
+        if to_launch:
+            ready = {
+                item for item in to_launch
+                if self.drone_states.get(item) == 'READY'
+            }
+            needs_arm = to_launch - ready
+            self.phase_transition_drones = to_launch
+            if needs_arm:
+                self.phase_transition_drones = needs_arm
+                self._dispatch_action(
+                    'arm', 'PHASE_ARMING', drone_ids=needs_arm,
+                )
+            else:
+                self._dispatch_action(
+                    'takeoff', 'PHASE_TAKEOFF', drone_ids=ready,
+                )
+            return
+
+        self._start_current_mission_phase(desired)
+
+    def _uncommanded_motion_error(self):
+        """Reject motion by a staged member that should remain grounded."""
+        active = self.mission_active_drones | self.phase_transition_drones
+        for drone_id in self.drone_ids:
+            if drone_id in active:
+                continue
+            position = self.positions.get(drone_id)
+            home = self.home_positions.get(drone_id)
+            if position is None or home is None:
+                continue
+            rise_m = position[2] - home[2]
+            if rise_m > SWARM_UNCOMMANDED_MOTION_M:
+                return (
+                    f'Uncommanded motion: inactive {drone_id} rose '
+                    f'{rise_m:.3f} m; possible radio/Vicon identity mismatch'
+                )
+        return None
+
+    def _publish_staged_transition_heartbeat(self):
+        """Keep unchanged airborne members controlled during transitions."""
+        if self.swarm_state not in {
+            'PHASE_ARMING',
+            'PHASE_ARM_SETTLE',
+            'PHASE_TAKEOFF',
+            'PHASE_LANDING',
+        }:
+            return
+        if self.phase_index is None or self.phase_index >= len(self.mission):
+            return
+
+        retained_drones = (
+            self.mission_active_drones - self.phase_transition_drones
+        )
+        if not retained_drones:
+            return
+
+        phase = self.mission[self.phase_index]
+        if phase.get('trajectory') is not None:
+            targets, _ = self._trajectory_commands(phase, 0.0)
+        else:
+            targets = self._targets_for_phase(phase)
+        targets = {
+            drone_id: target
+            for drone_id, target in targets.items()
+            if drone_id in retained_drones
+        }
+        feedforwards = {
+            drone_id: (0.0, 0.0, 0.0)
+            for drone_id in targets
+        }
+        self._publish_motion_commands(targets, feedforwards)
+
+    def _update_staged_transition(self, now):
+        """Advance a phase-level land/arm/takeoff transition."""
+        if self.swarm_state == 'PHASE_LANDING':
+            if all(
+                self.drone_states.get(item) == 'DISARMED'
+                for item in self.phase_transition_drones
+            ):
+                self.mission_active_drones -= self.phase_transition_drones
+                self.phase_transition_drones = set()
+                self._transition_to_mission_phase()
+            return True
+        if self.swarm_state == 'PHASE_ARM_SETTLE':
+            if now - self.action_started_at >= ARM_SETTLE_TIME_S:
+                self.phase_transition_drones = set()
+                self._transition_to_mission_phase()
+            return True
+        if self.swarm_state == 'PHASE_TAKEOFF':
+            if now - self.action_started_at > SWARM_TAKEOFF_TIMEOUT_S:
+                self._safety_land('Mission phase takeoff timed out')
+                return True
+            if (
+                self._all_at_takeoff_height(self.phase_transition_drones)
+                and self._all_control_phases_are(
+                    'EXTERNAL_HOVER', self.phase_transition_drones,
+                )
+            ):
+                self.mission_active_drones |= self.phase_transition_drones
+                self.phase_transition_drones = set()
+                desired = set(
+                    self.mission[self.phase_index]['active_drones']
+                )
+                self._start_current_mission_phase(desired)
+            return True
+        return False
+
+    def _start_current_mission_phase(self, active_drones):
+        self.mission_active_drones = set(active_drones)
+        self.phase_arrived_at = None
+        self.phase_arrived_drones = set()
+        self.phase_started_at = time.monotonic()
+        self._set_state('MISSION')
+        self.get_logger().info(
+            f'Swarm mission phase: {self.mission[self.phase_index]["name"]}'
+        )
 
     def _begin_mission(self):
         now = time.monotonic()
@@ -601,9 +789,14 @@ class SwarmNode(Node):
             )
         else:
             targets = self._targets_for_phase(phase)
+            if self.staged_mission:
+                targets = {
+                    item: target for item, target in targets.items()
+                    if item in self.mission_active_drones
+                }
             feedforwards = {
                 drone_id: (0.0, 0.0, 0.0)
-                for drone_id in self.drone_ids
+                for drone_id in targets
             }
         self._publish_motion_commands(targets, feedforwards)
 
@@ -614,7 +807,8 @@ class SwarmNode(Node):
             and now - self.phase_started_at >= timeout_s
         ):
             errors = ', '.join(
-                f'{drone_id}={math.dist(self.positions[drone_id], target):.3f} m'
+                f'{drone_id}='
+                f'{math.dist(self.positions[drone_id], target):.3f} m'
                 for drone_id, target in targets.items()
             )
             self._safety_land(
@@ -638,14 +832,14 @@ class SwarmNode(Node):
                 self.positions[drone_id],
                 targets[drone_id],
             )
-            for drone_id in self.drone_ids
+            for drone_id in targets
         }
         for drone_id, error_m in target_errors.items():
             if error_m <= arrival_tolerance_m:
                 self.phase_arrived_drones.add(drone_id)
             elif error_m > arrival_tolerance_m * 1.5:
                 self.phase_arrived_drones.discard(drone_id)
-        if len(self.phase_arrived_drones) != len(self.drone_ids):
+        if len(self.phase_arrived_drones) != len(targets):
             self.phase_arrived_at = None
             return
 
@@ -664,9 +858,17 @@ class SwarmNode(Node):
         self.phase_arrived_drones = set()
         if self.phase_index >= len(self.mission):
             self.phase_started_at = None
-            self._dispatch_action('land', 'LAND_REQUESTED', active_only=True)
+            if self.staged_mission:
+                self._transition_to_mission_phase()
+            else:
+                self._dispatch_action(
+                    'land', 'LAND_REQUESTED', active_only=True,
+                )
             return
 
+        if self.staged_mission:
+            self._transition_to_mission_phase()
+            return
         self.phase_started_at = now
         self.get_logger().info(
             f'Swarm mission phase: {self.mission[self.phase_index]["name"]}'
@@ -741,8 +943,9 @@ class SwarmNode(Node):
         trajectory = phase['trajectory']
         duration_s = trajectory['duration_s']
         progress = max(0.0, min(elapsed_s / duration_s, 1.0))
-        angle = 2.0 * math.pi * progress
-        angular_rate = 2.0 * math.pi / duration_s
+        rotation_angle = math.radians(trajectory.get('angle_deg', 360.0))
+        angle = rotation_angle * progress
+        angular_rate = rotation_angle / duration_s
         radius_m = trajectory['radius_m']
         height_m = trajectory['height_m']
         phase_step = 2.0 * math.pi / len(self.drone_ids)
@@ -811,7 +1014,10 @@ class SwarmNode(Node):
 
     def _actual_positions_are_separated(self):
         separation = self._minimum_separation()
-        return separation is not None and separation[0] >= SWARM_MIN_SEPARATION_M
+        return (
+            separation is not None
+            and separation[0] >= SWARM_MIN_SEPARATION_M
+        )
 
     def _minimum_separation(self):
         """Return minimum measured separation and its drone pair."""
@@ -871,7 +1077,15 @@ class SwarmNode(Node):
             SWARM_MIN_AIRBORNE_HEIGHT_M,
             self.takeoff_height_m - SWARM_ALTITUDE_LOSS_MARGIN_M,
         )
-        for drone_id in self.drone_ids:
+        monitored_drones = (
+            self.mission_active_drones
+            if (
+                getattr(self, 'staged_mission', False)
+                and self.swarm_state == 'MISSION'
+            )
+            else self.drone_ids
+        )
+        for drone_id in monitored_drones:
             position = self.positions.get(drone_id)
             home = self.home_positions.get(drone_id)
             if position is None or home is None:

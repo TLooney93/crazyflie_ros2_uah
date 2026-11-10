@@ -18,6 +18,6 @@ PROFILE = {
         'cf3': DRONES.get('cf3', ''),
     },
     'mission_name': 'three_drone_demo',
-    'takeoff_height_m': 0.45,
+    'takeoff_height_m': 0.30,
     'simulation_world': 'crazyflie_three_swarm_world.sdf',
 }

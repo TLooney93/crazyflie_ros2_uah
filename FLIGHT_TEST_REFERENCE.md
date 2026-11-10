@@ -3,7 +3,8 @@
 This runbook covers the complete hardware startup and execution procedure for
 the `cf1` autonomous test mission. The mission takes off vertically, hovers,
 flies a smooth figure-eight centered on its takeoff point, returns to the
-origin, and lands.
+origin, and lands. See `LAUNCH_TEST_REFERENCE.md` for other modes and
+`ARCHITECTURE.md` for the runtime design.
 
 ## Current configuration
 
@@ -13,7 +14,7 @@ origin, and lands.
 | Vicon computer wired IP | `192.168.10.1` |
 | Operator computer wired IP | `192.168.10.2/24` |
 | Wired interface | `enx047bcb661434` |
-| Vicon pose topic | `/vicon/cf231/cf231` |
+| Vicon pose topic | `/vicon/cf1/cf1` |
 | Pose message type | `geometry_msgs/msg/PoseStamped` |
 | Takeoff height | 0.30 m above the recorded floor position |
 | Initial hover | 3 seconds |
@@ -136,8 +137,8 @@ still points to the campus/Wi-Fi address.
 source /opt/ros/jazzy/setup.bash
 source ~/vicon_receiver_ws/install/setup.bash
 ros2 topic list | grep vicon
-ros2 topic type /vicon/cf231/cf231
-ros2 topic hz /vicon/cf231/cf231
+ros2 topic type /vicon/cf1/cf1
+ros2 topic hz /vicon/cf1/cf1
 ```
 
 Required type:
@@ -150,7 +151,7 @@ The observed stream normally runs near 120 Hz. Stop the frequency display with
 `Ctrl+C` after confirming a stable rate. Inspect coordinates if needed:
 
 ```bash
-ros2 topic echo /vicon/cf231/cf231
+ros2 topic echo /vicon/cf1/cf1
 ```
 
 Move the unpowered drone by hand and verify that X, Y, and Z change smoothly
@@ -163,7 +164,7 @@ and in the expected directions.
 ```bash
 cfenv
 cfbuild
-cfrun cf1 vicon /vicon/cf231/cf231
+cfrun cf1 vicon /vicon/cf1/cf1
 ```
 
 Leave this terminal running. Do not arm until it reports both:
@@ -279,7 +280,7 @@ side-to-side Vicon gesture can start the mission selected at launch.
 Start the hardware controller in wand mode with:
 
 ```bash
-cfwandflight cf1 vicon /vicon/cf231/cf231 "" hover_test
+cfwandflight cf1 vicon /vicon/cf1/cf1 "" hover_test
 ```
 
 The wand cannot arm the drone. Arming remains a deliberate terminal command,
@@ -466,7 +467,8 @@ enabled. Then run:
 ros2 topic list | grep vicon
 ```
 
-The current rigid-body topic is `/vicon/cf231/cf231`.
+The default `cf1` rigid-body topic is `/vicon/cf1/cf1`. Always confirm the
+actual Tracker subject and segment with `ros2 topic list`.
 
 ### Wrong Vicon topic name
 
@@ -479,7 +481,7 @@ cfrun cf1 vicon /vicon/SUBJECT/SEGMENT
 ### Node waits for Vicon poses
 
 Verify that Terminal 1 is still running, the raw topic is updating, and
-Terminal 3 was started with `/vicon/cf231/cf231`.
+Terminal 3 was started with the exact topic reported by `ros2 topic list`.
 
 ### Takeoff is rejected
 
@@ -525,7 +527,7 @@ cfenv
 ros2 run cf_control crazyflie_node --ros-args \
   -p drone_id:=cf1 \
   -p positioning_source:=vicon \
-  -p vicon_pose_topic:=/vicon/cf231/cf231
+  -p vicon_pose_topic:=/vicon/cf1/cf1
 
 ros2 service call /cf1/arm std_srvs/srv/Trigger '{}'
 ros2 service call /cf1/takeoff std_srvs/srv/Trigger '{}'

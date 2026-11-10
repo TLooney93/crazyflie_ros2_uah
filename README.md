@@ -1,82 +1,74 @@
-Undergrad Senior Design Project - CrazyConductors
-University of Alabama Huntsville EE dept Fall 2026
-Drone swarm software architecture using Crazyflie platform and LightHouse Positioning System
+# CrazyConductors Crazyflie control stack
 
-OBJECTIVE:
-Autonomous drone swarm commanded by wand gesture
+ROS 2 Jazzy software for Vicon-guided Crazyflie flight, coordinated swarms,
+Gazebo simulation, and wand gesture control. Lighthouse remains available as
+an alternate hardware position source selected before launch.
 
-EXECUTION:
-Utilize Cflib (Python API used for intefacing with CF firmware) and ros2 to inteface multiple nodes,
-implement safety filter, and recognize and execute gesture commands.
+The active hardware baseline is Vicon with one Crazyradio shared by the
+controllers in a swarm process. Positions are metres, velocities are metres
+per second, and mission offsets are relative to each vehicle's arming position
+unless a mission explicitly uses formation coordinates.
 
+## Start here
 
-CURRENT PYTHON ARCHITECTURE:
-
-- `crazyflie_node.py`: owns one radio connection and its ROS 2 topics
-- `telemetry.py`: reads Lighthouse-backed position estimates from cflib
-- `flight_controller.py`: converts position error into bounded velocity
-- `crazyflie_interface.py`: provides cflib commander methods for future flight integration
-- `swarm_node.py`: future coordination layer for multiple drone nodes
-- `lighthouse.py`: validates Lighthouse input and estimator variance stability during startup
-
-Per-drone ROS 2 data flow:
-
-    /<drone_id>/target (geometry_msgs/Point)
-        -> FlightController
-        -> bounded world-frame velocity (requires fresh, valid position telemetry)
-        -> /<drone_id>/debug/velocity (geometry_msgs/Twist)
-
-    Crazyflie stateEstimate.{x,y,z}
-        -> TelemetryReader
-        -> /<drone_id>/position (geometry_msgs/Point)
-
-The node includes a deliberately constrained first-flight mode. It records the
-ground position when armed, takes off vertically to 0.30 m, holds the recorded
-x/y position, and lands at the recorded ground position. External target topics
-are disabled by default. A maximum flight timer initiates landing automatically.
-
-## First vertical flight test
-
-Do the first checks with propellers removed. For a propeller-on test, use a clear
-indoor test area, propeller guards, a fully charged battery, and a second terminal
-with the emergency-stop command ready.
-
-Set up the environment and start the node:
+Load the environment in every terminal, then build and test:
 
 ```bash
-source /opt/ros/jazzy/setup.bash
-source /home/tanner-looney/dev/crazyflie/venv/bin/activate
-cd /home/tanner-looney/dev/crazyflie/cfros_ws
-colcon build --packages-select cf_control
-source install/setup.bash
-ros2 run cf_control crazyflie_node --ros-args -p drone_id:=cf1
+cfenv
+cfbuild
+cftest
 ```
 
-In a second terminal, source the same ROS, virtual-environment, and workspace
-setup files. Confirm telemetry and state before arming:
+Run a safe single-drone simulation:
 
 ```bash
-ros2 topic echo /cf1/position
-ros2 topic echo /cf1/flight_state
+cfsim gui autonomous hover_test
 ```
 
-Then invoke each step separately:
+Run the current three-drone simulation profile:
 
 ```bash
-ros2 service call /cf1/arm std_srvs/srv/Trigger {}
-ros2 service call /cf1/takeoff std_srvs/srv/Trigger {}
-ros2 service call /cf1/land std_srvs/srv/Trigger {}
+cfswarmsim gui three_drone_demo
 ```
 
-Keep this command ready in another terminal. It stops and disarms immediately;
-it does not perform a controlled landing:
+Launch does not arm automatically. In another terminal, use
+`cfarm`/`cftakeoff` for a single drone or `cfswarmstart` for a swarm. Keep
+`cfstop` or `cfswarmstop` ready during every hardware test.
 
-```bash
-ros2 service call /cf1/emergency_stop std_srvs/srv/Trigger {}
-```
+## Documentation
 
-If position telemetry becomes stale in flight, the node commands a 0.10 m/s
-vertical descent for at most three seconds and then stops and disarms. The normal
-flight test automatically begins landing after ten seconds. Configuration in
-`config.py` uses metres for position, metres per second for velocity, and degrees
-per second for yaw rate.
+- [ARCHITECTURE.md](ARCHITECTURE.md) — process ownership, data flow, safety,
+  and where each kind of change belongs.
+- [LAUNCH_TEST_REFERENCE.md](LAUNCH_TEST_REFERENCE.md) — command and alias
+  reference for simulation and hardware.
+- [FLIGHT_TEST_REFERENCE.md](FLIGHT_TEST_REFERENCE.md) — physical-flight
+  checklist and Vicon verification.
+- [MISSION_AND_PROFILE_AUTHORING_REFERENCE.md](MISSION_AND_PROFILE_AUTHORING_REFERENCE.md)
+  — templates and validation rules for missions and profiles.
+- [PROJECT_FILE_AND_MISSION_GUIDE.md](PROJECT_FILE_AND_MISSION_GUIDE.md) —
+  detailed source-tree map.
+
+## Configuration ownership
+
+| Change | Edit |
+|---|---|
+| Radio address or shared control/safety tuning | `src/cf_control/cf_control/config.py` |
+| Single-drone route | `src/cf_control/cf_control/crazyflie_missions/` |
+| Swarm route or formation | `src/cf_control/cf_control/swarm_missions/` |
+| Swarm roster, Vicon topics, radios, world | `src/cf_control/cf_control/swarm_profiles/` |
+| Shell commands and aliases | `/home/tanner-looney/dev/crazyflie/scripts/cf_env.sh` |
+
+Single and swarm hardware flights both use `CrazyflieNode`, so controller,
+takeoff, telemetry, and landing settings in `config.py` apply to both. Swarm-
+only gates such as separation and group timeouts are applied by `SwarmNode`.
+
+## Safety baseline
+
+- Simulate a changed mission before hardware flight.
+- Verify each Vicon rigid-body topic maps to the intended physical drone.
+- Use charged batteries and confirm fresh Vicon and onboard telemetry before
+  arming.
+- Use controlled landing when possible. Emergency stop cuts thrust and an
+  airborne vehicle will fall.
+- Tune one safety factor at a time and review the ROS log and bag after each
+  hardware test.

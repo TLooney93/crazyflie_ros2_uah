@@ -11,14 +11,22 @@ import rclpy
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.parameter import Parameter
+from std_srvs.srv import Trigger
 
 
 class HardwareSwarmRunner(Node):
     """Own the configuration for co-located hardware controller nodes."""
 
     def __init__(self):
+        """Create the shared dispatcher and independent stop service."""
         super().__init__('hardware_swarm_runner')
         self.radio_dispatcher = RadioCommandDispatcher()
+        self.controllers = []
+        self.hardware_stop_service = self.create_service(
+            Trigger,
+            '/hardware_swarm/emergency_stop',
+            self.emergency_stop_callback,
+        )
 
         self.declare_parameter('drone_ids', ['cf1', 'cf2'])
         self.declare_parameter('vicon_topics', ['', ''])
@@ -107,7 +115,31 @@ class HardwareSwarmRunner(Node):
                 )
             )
 
+        self.controllers = controllers
         return controllers
+
+    def emergency_stop_callback(self, request, response):
+        """Stop every radio link without depending on the coordinator."""
+        if not self.controllers:
+            response.success = False
+            response.message = 'No hardware controllers are registered'
+            return response
+
+        failures = []
+        for controller in self.controllers:
+            try:
+                controller._stop_and_disarm(
+                    'Hardware-runner emergency stop requested'
+                )
+            except Exception as error:
+                failures.append(f'{controller.drone_id}: {error}')
+        response.success = not failures
+        response.message = (
+            'All hardware controllers stopped and disarmed'
+            if not failures
+            else 'Emergency-stop failures: ' + '; '.join(failures)
+        )
+        return response
 
     def create_wand_driver(self):
         """Create the optional button/attitude wand in this radio process."""

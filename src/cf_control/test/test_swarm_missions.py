@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from cf_control.config import SWARM_MIN_SEPARATION_M
 from cf_control.swarm_missions import load_swarm_mission
 from cf_control.swarm_node import SwarmNode
+
 import pytest
 
 
@@ -159,45 +160,153 @@ def test_five_drone_demo_loads_for_expected_drones():
     ]
 
 
-def test_three_drone_demo_forms_triangle_and_orbits_after_hover():
-    """The three-drone choreography should go directly to its triangle."""
+def test_three_drone_demo_has_bounded_triangle_sequence():
+    """The demo must hover, rotate a triangle 90 degrees, and form a line."""
     drone_ids = ['cf1', 'cf2', 'cf3']
     phases = load_swarm_mission('three_drone_demo', drone_ids)
 
     assert [phase['name'] for phase in phases] == [
         'INITIAL_HOVER',
         'TRIANGLE_ENTRY',
-        'TRIANGLE_ORBIT',
+        'TRIANGLE_ROTATE_90',
+        'RETURN_TO_LINE',
     ]
-    orbit = phases[-1]
-    assert orbit['trajectory']['type'] == 'formation_orbit'
-    assert orbit['trajectory']['radius_m'] == pytest.approx(0.35)
+    assert phases[0]['hold_s'] == pytest.approx(3.0)
+    assert all(set(phase['active_drones']) == set(drone_ids) for phase in phases)
+    rotation = phases[2]['trajectory']
+    assert rotation['angle_deg'] == pytest.approx(90.0)
+    assert rotation['duration_s'] == pytest.approx(4.0)
+    assert sum(phase['hold_s'] for phase in phases) + rotation['duration_s'] < 10.0
 
 
-def test_three_drone_orbit_is_an_equilateral_triangle():
-    """Orbit targets should stay equally spaced around the launch center."""
+def test_three_drone_rotation_ends_at_ninety_degrees():
+    """The continuous trajectory must stop after one quarter turn."""
     node = object.__new__(SwarmNode)
     node.drone_ids = ['cf1', 'cf2', 'cf3']
     node.home_positions = {
-        'cf1': (-0.55, 0.0, 0.08),
-        'cf2': (0.0, 0.0, 0.08),
-        'cf3': (0.55, 0.0, 0.08),
+        'cf1': (-0.8, 0.0, 0.04),
+        'cf2': (0.0, 0.0, 0.04),
+        'cf3': (0.8, 0.0, 0.04),
     }
-    phases = load_swarm_mission('three_drone_demo', node.drone_ids)
-    orbit = next(p for p in phases if p['name'] == 'TRIANGLE_ORBIT')
+    phase = load_swarm_mission(
+        'three_drone_demo', node.drone_ids,
+    )[2]
 
-    targets, feedforwards = node._trajectory_commands(orbit, 7.5)
-    pair_distances = [
-        math.dist(targets[first][:2], targets[second][:2])
-        for first, second in (('cf1', 'cf2'), ('cf2', 'cf3'), ('cf3', 'cf1'))
-    ]
-    expected_separation = math.sqrt(3.0) * 0.35
-    assert pair_distances == pytest.approx([expected_separation] * 3)
-    assert all(
-        math.hypot(*velocity[:2])
-        == pytest.approx(2.0 * math.pi * 0.35 / 30.0)
-        for velocity in feedforwards.values()
+    start, _ = node._trajectory_commands(phase, 0.0)
+    end, _ = node._trajectory_commands(
+        phase, phase['trajectory']['duration_s'],
     )
+
+    assert start['cf1'][:2] == pytest.approx((-0.3, 0.0))
+    assert end['cf1'][:2] == pytest.approx((0.0, -0.3))
+    assert math.dist(end['cf1'], end['cf2']) > SWARM_MIN_SEPARATION_M
+
+
+def test_staged_phase_arrival_ignores_grounded_members():
+    """Only active drones participate in staged phase arrival timing."""
+    node = object.__new__(SwarmNode)
+    node.drone_ids = ['cf1', 'cf2', 'cf3']
+    node.mission = load_swarm_mission(
+        'three_drone_demo', node.drone_ids,
+    )
+    node.phase_index = 0
+    node.phase_started_at = 10.0
+    node.phase_arrived_at = None
+    node.phase_arrived_drones = set()
+    node.staged_mission = True
+    node.mission_active_drones = {'cf1'}
+    node.home_positions = {
+        'cf1': (0.0, 0.0, 0.0),
+        'cf2': (1.0, 0.0, 0.0),
+        'cf3': (2.0, 0.0, 0.0),
+    }
+    node.positions = {
+        'cf1': (0.0, 0.0, 0.30),
+        'cf2': (1.0, 0.0, 0.0),
+        'cf3': (2.0, 0.0, 0.0),
+    }
+    node._publish_motion_commands = lambda targets, feedforwards: None
+    node._advance_mission_phase = lambda now: None
+
+    node._update_mission(10.1)
+
+    assert node.phase_arrived_drones == {'cf1'}
+    assert node.phase_arrived_at == pytest.approx(10.1)
+
+
+def test_staged_mission_rejects_rising_inactive_member():
+    """A grounded marker rising exposes a radio/Vicon identity mismatch."""
+    node = object.__new__(SwarmNode)
+    node.drone_ids = ['cf1', 'cf2', 'cf3']
+    node.mission_active_drones = {'cf1'}
+    node.phase_transition_drones = set()
+    node.home_positions = {
+        'cf1': (0.0, 0.0, 0.02),
+        'cf2': (1.0, 0.0, 0.02),
+        'cf3': (2.0, 0.0, 0.02),
+    }
+    node.positions = {
+        'cf1': (0.0, 0.0, 0.25),
+        'cf2': (1.0, 0.0, 0.02),
+        'cf3': (2.0, 0.0, 0.15),
+    }
+
+    error = node._uncommanded_motion_error()
+
+    assert 'inactive cf3 rose' in error
+    assert 'radio/Vicon identity mismatch' in error
+
+
+def test_staged_mission_allows_commanded_member_to_rise():
+    """The identity guard must not reject the drone being launched."""
+    node = object.__new__(SwarmNode)
+    node.drone_ids = ['cf1', 'cf2', 'cf3']
+    node.mission_active_drones = set()
+    node.phase_transition_drones = {'cf1'}
+    node.home_positions = {
+        drone_id: (float(index), 0.0, 0.02)
+        for index, drone_id in enumerate(node.drone_ids)
+    }
+    node.positions = dict(node.home_positions)
+    node.positions['cf1'] = (0.0, 0.0, 0.25)
+
+    assert node._uncommanded_motion_error() is None
+
+
+def test_staged_transition_keeps_retained_airborne_member_alive():
+    """Landing one member must not starve another member's heartbeat."""
+    node = object.__new__(SwarmNode)
+    node.drone_ids = ['cf1', 'cf2', 'cf3']
+    node.mission = [{
+        'name': 'HOVER CF1/CF3',
+        'offsets': {
+            'cf1': (0.0, 0.0, 0.30),
+            'cf2': (0.0, 0.0, 0.0),
+            'cf3': (0.0, 0.0, 0.30),
+        },
+    }]
+    node.phase_index = 0
+    node.swarm_state = 'PHASE_LANDING'
+    node.mission_active_drones = {'cf1', 'cf2'}
+    node.phase_transition_drones = {'cf2'}
+    node.home_positions = {
+        'cf1': (0.0, 0.0, 0.04),
+        'cf2': (-1.0, 0.0, 0.04),
+        'cf3': (1.0, 0.0, 0.04),
+    }
+    published = []
+    node._publish_motion_commands = (
+        lambda targets, feedforwards: published.append(
+            (targets, feedforwards)
+        )
+    )
+
+    node._publish_staged_transition_heartbeat()
+
+    targets, feedforwards = published[0]
+    assert set(targets) == {'cf1'}
+    assert targets['cf1'] == pytest.approx((0.0, 0.0, 0.34))
+    assert feedforwards == {'cf1': (0.0, 0.0, 0.0)}
 
 
 def test_mission_rejects_wrong_drone_set():

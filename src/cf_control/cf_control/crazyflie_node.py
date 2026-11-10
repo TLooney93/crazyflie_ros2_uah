@@ -1,6 +1,8 @@
+"""Per-vehicle ROS 2 controller for hardware and Gazebo flight."""
+
 import math
-from threading import Lock
 import time
+from threading import Lock
 
 from cf_control.config import (
     ARM_SETTLE_TIME_S,
@@ -14,6 +16,7 @@ from cf_control.config import (
     EXTERNAL_MAX_HEIGHT_M,
     EXTERNAL_MAX_HORIZONTAL_OFFSET_M,
     EXTERNAL_MIN_HEIGHT_M,
+    EXTERNAL_TARGET_TIMEOUT_S,
     FLIGHT_TEST_HEIGHT_M,
     FLIGHT_TEST_POSITION_TOLERANCE_M,
     KALMAN_ESTIMATOR,
@@ -30,9 +33,18 @@ from cf_control.config import (
     PREFLIGHT_MIN_BATTERY_VOLTAGE,
     TAKEOFF_BOOST_END_HEIGHT_M,
     TAKEOFF_BOOST_M_S,
+    TAKEOFF_ASSIST_GRACE_S,
+    TAKEOFF_GRACE_MAX_HORIZONTAL_VELOCITY_M_S,
+    TAKEOFF_GRACE_MAX_VERTICAL_VELOCITY_M_S,
     TAKEOFF_MAX_HORIZONTAL_DEVIATION_M,
     TAKEOFF_MAX_HORIZONTAL_VELOCITY_M_S,
     TAKEOFF_MAX_VERTICAL_VELOCITY_M_S,
+    TAKEOFF_MIN_PROGRESS_HEIGHT_M,
+    TAKEOFF_NEAR_FLOOR_HEIGHT_M,
+    TAKEOFF_NEAR_FLOOR_MAX_HORIZONTAL_VELOCITY_M_S,
+    TAKEOFF_PROGRESS_TIMEOUT_S,
+    TAKEOFF_THRUST_SATURATION_DURATION_S,
+    TAKEOFF_THRUST_SATURATION_THRESHOLD,
     TELEMETRY_LOSS_DESCENT_S,
     TELEMETRY_PERIOD_MS,
     VALID_WAND_GESTURES,
@@ -54,19 +66,24 @@ from cf_control.crazyflie_interface import (
     SimulatedCrazyflieInterface,
 )
 from cf_control.crazyflie_missions import load_crazyflie_mission
-from cf_control.flight_controller import (
-    FlightController,
-    ground_effect_takeoff_boost,
-    limit_horizontal_velocity,
-)
+from cf_control.flight_controller import FlightController
 from cf_control.flight_state import FlightState
 from cf_control.lighthouse import LighthouseManager
 from cf_control.sample_rate import SampleRateLimiter
+from cf_control.takeoff import (
+    TakeoffSafetyLimits,
+    TakeoffSafetyMonitor,
+    ground_effect_takeoff_boost,
+    limit_horizontal_velocity,
+    takeoff_horizontal_velocity_limit,
+    takeoff_vertical_velocity_limit,
+)
 from cf_control.telemetry import TelemetryReader
 from cf_control.wand_control import gesture_action, tilt_to_unit_offset
+
+import cflib.crtp
 from cflib.crazyflie import Crazyflie
 from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
-import cflib.crtp
 from geometry_msgs.msg import Point, PoseStamped, Twist
 from nav_msgs.msg import Odometry
 import rclpy
@@ -77,6 +94,7 @@ from std_srvs.srv import Trigger
 
 
 class CrazyflieNode(Node):
+    """Own one vehicle's position input, state machine, and commands."""
 
     def __init__(
         self,
@@ -84,6 +102,7 @@ class CrazyflieNode(Node):
         parameter_overrides=None,
         radio_dispatcher=None,
     ):
+        """Create one configured hardware or simulated vehicle controller."""
         super().__init__(
             node_name,
             parameter_overrides=parameter_overrides,
@@ -266,8 +285,25 @@ class CrazyflieNode(Node):
         self.test_feedforward = (0.0, 0.0, 0.0)
         self.external_feedforward = (0.0, 0.0, 0.0)
         self.external_feedforward_received_at = None
+        self.external_target_received_at = None
         self.telemetry_lost_at = None
         self.landing_started_at = None
+        self.takeoff_safety = TakeoffSafetyMonitor(
+            TakeoffSafetyLimits(
+                max_horizontal_deviation_m=(
+                    TAKEOFF_MAX_HORIZONTAL_DEVIATION_M
+                ),
+                assist_grace_s=TAKEOFF_ASSIST_GRACE_S,
+                min_progress_height_m=TAKEOFF_MIN_PROGRESS_HEIGHT_M,
+                progress_timeout_s=TAKEOFF_PROGRESS_TIMEOUT_S,
+                thrust_saturation_threshold=(
+                    TAKEOFF_THRUST_SATURATION_THRESHOLD
+                ),
+                thrust_saturation_duration_s=(
+                    TAKEOFF_THRUST_SATURATION_DURATION_S
+                ),
+            )
+        )
         self.wand_active = False
         self.wand_orientation = None
         self.wand_reference_orientation = None
@@ -410,6 +446,7 @@ class CrazyflieNode(Node):
             )
 
     def target_callback(self, msg):
+        """Accept a bounded absolute target when external control is active."""
         if not self.external_targets_enabled:
             self.get_logger().warning(
                 'Ignoring external target: this launch mode disabled them'
@@ -470,6 +507,7 @@ class CrazyflieNode(Node):
             msg.y,
             msg.z
         )
+        self.external_target_received_at = time.monotonic()
 
         if previous_target != target:
             self.get_logger().info(
@@ -573,11 +611,29 @@ class CrazyflieNode(Node):
 
         self.home_position = position
         self.flight_controller.clear_target()
-        self.interface.arm()
+        try:
+            supervisor_states = self.interface.arm()
+        except Exception as error:
+            # The request may have reached the firmware even if confirmation
+            # did not. Request disarming and never advance ROS to READY.
+            disarm_error = None
+            try:
+                self.interface.disarm()
+            except Exception as cleanup_error:
+                disarm_error = cleanup_error
+            message = f'Firmware did not confirm arming: {error}'
+            if disarm_error is not None:
+                message += f'; disarm cleanup also failed: {disarm_error}'
+            self.get_logger().error(message)
+            return self._service_failure(response, message)
+
         self.armed_at = time.monotonic()
         self._set_state(FlightState.READY)
         response.success = True
-        response.message = 'Armed and ready for vertical takeoff'
+        state_text = ', '.join(supervisor_states or ())
+        response.message = 'Firmware confirmed armed and ready for takeoff'
+        if state_text:
+            response.message += f' ({state_text})'
         return response
 
     def takeoff_callback(self, request, response):
@@ -621,6 +677,7 @@ class CrazyflieNode(Node):
             floor_z + takeoff_height_m
         )
         self.flight_started_at = time.monotonic()
+        self.takeoff_safety.reset()
         self.mission_phase_index = None
         self.mission_phase_arrived_at = None
         if wand_mode:
@@ -632,6 +689,11 @@ class CrazyflieNode(Node):
         self._set_test_phase(takeoff_phase, self.flight_started_at)
         self.telemetry_lost_at = None
         self._set_state(FlightState.FLYING)
+        self.get_logger().info(
+            f'Heavy-airframe takeoff assist active for '
+            f'{TAKEOFF_ASSIST_GRACE_S:.1f} s; vertical command cap '
+            f'{TAKEOFF_GRACE_MAX_VERTICAL_VELOCITY_M_S:.2f} m/s'
+        )
         response.success = True
         if wand_mode:
             response.message = (
@@ -858,6 +920,7 @@ class CrazyflieNode(Node):
         return response
 
     def connect(self):
+        """Connect hardware and start telemetry, or await simulation data."""
         if self.simulation:
             self.get_logger().info(
                 'Simulation mode active; waiting for Gazebo odometry'
@@ -1157,6 +1220,7 @@ class CrazyflieNode(Node):
         self.sim_velocity_pub.publish(msg)
 
     def control_callback(self):
+        """Run one control, safety, and mission-state update."""
         with self.position_lock:
             position = self.current_position
             received_at = self.position_received_at
@@ -1212,16 +1276,10 @@ class CrazyflieNode(Node):
             )
         )
         if takeoff_active:
-            horizontal_deviation_m = math.hypot(
-                position[0] - self.home_position[0],
-                position[1] - self.home_position[1],
-            )
-            if horizontal_deviation_m > (
-                TAKEOFF_MAX_HORIZONTAL_DEVIATION_M
-            ):
+            takeoff_safety_error = self._takeoff_safety_error(position, now)
+            if takeoff_safety_error is not None:
                 self._begin_landing(
-                    'Takeoff left launch column by '
-                    f'{horizontal_deviation_m:.3f} m',
+                    takeoff_safety_error,
                     landing_xy=position[:2],
                 )
                 takeoff_active = False
@@ -1232,6 +1290,16 @@ class CrazyflieNode(Node):
                 'TAKEOFF',
                 'EXTERNAL_TAKEOFF',
                 'WAND_TAKEOFF',
+            )
+
+        if (
+            self.flight_state is FlightState.FLYING
+            and self.test_phase == 'EXTERNAL_HOVER'
+            and self._external_target_heartbeat_timed_out(now)
+        ):
+            self._begin_landing(
+                'External target heartbeat timed out; coordinator lost',
+                landing_xy=position[:2],
             )
 
         if self.flight_state is FlightState.LANDING:
@@ -1282,20 +1350,39 @@ class CrazyflieNode(Node):
             )
         vx = max(-MAX_VELOCITY, min(vx, MAX_VELOCITY))
         vy = max(-MAX_VELOCITY, min(vy, MAX_VELOCITY))
-        vertical_velocity_limit = (
-            TAKEOFF_MAX_VERTICAL_VELOCITY_M_S
-            if takeoff_active
-            else MAX_VELOCITY
-        )
+        if takeoff_active:
+            takeoff_elapsed_s = (
+                now - self.flight_started_at
+                if self.flight_started_at is not None
+                else 0.0
+            )
+            vertical_velocity_limit = takeoff_vertical_velocity_limit(
+                takeoff_elapsed_s,
+                TAKEOFF_ASSIST_GRACE_S,
+                TAKEOFF_GRACE_MAX_VERTICAL_VELOCITY_M_S,
+                TAKEOFF_MAX_VERTICAL_VELOCITY_M_S,
+            )
+        else:
+            vertical_velocity_limit = MAX_VELOCITY
         vz = max(
             -MAX_VELOCITY,
             min(vz, vertical_velocity_limit),
         )
         if takeoff_active:
+            height_above_floor_m = position[2] - self.home_position[2]
+            horizontal_velocity_limit = takeoff_horizontal_velocity_limit(
+                takeoff_elapsed_s,
+                TAKEOFF_ASSIST_GRACE_S,
+                TAKEOFF_GRACE_MAX_HORIZONTAL_VELOCITY_M_S,
+                height_above_floor_m,
+                TAKEOFF_NEAR_FLOOR_HEIGHT_M,
+                TAKEOFF_NEAR_FLOOR_MAX_HORIZONTAL_VELOCITY_M_S,
+                TAKEOFF_MAX_HORIZONTAL_VELOCITY_M_S,
+            )
             vx, vy = limit_horizontal_velocity(
                 vx,
                 vy,
-                TAKEOFF_MAX_HORIZONTAL_VELOCITY_M_S,
+                horizontal_velocity_limit,
             )
         if self.flight_state is FlightState.LANDING:
             vz = max(vz, -LANDING_SPEED_M_S)
@@ -1407,6 +1494,7 @@ class CrazyflieNode(Node):
         self.mission_phase_index = index
         self.mission_phase_arrived_at = None
         self.test_feedforward = (0.0, 0.0, 0.0)
+        self.external_target_received_at = None
         self._set_test_phase(self.mission_phases[index]['name'], now)
 
     def _advance_mission(self, now):
@@ -1440,6 +1528,26 @@ class CrazyflieNode(Node):
             <= FLIGHT_TEST_POSITION_TOLERANCE_M
             and horizontal_deviation_m
             <= TAKEOFF_MAX_HORIZONTAL_DEVIATION_M
+        )
+
+    def _takeoff_safety_error(self, position, now):
+        """Return a reason when takeoff lacks safe position progress."""
+        with self.position_lock:
+            stabilizer_thrust = self.stabilizer_thrust
+        return self.takeoff_safety.check(
+            position=position,
+            home_position=self.home_position,
+            now=now,
+            flight_started_at=self.flight_started_at,
+            stabilizer_thrust=stabilizer_thrust,
+        )
+
+    def _external_target_heartbeat_timed_out(self, now):
+        """Start the watchdog only after the coordinator's first target."""
+        return (
+            self.external_target_received_at is not None
+            and now - self.external_target_received_at
+            > EXTERNAL_TARGET_TIMEOUT_S
         )
 
     def _fresh_position(self):
@@ -1509,6 +1617,7 @@ class CrazyflieNode(Node):
         self.test_feedforward = (0.0, 0.0, 0.0)
         self._clear_external_feedforward()
         self.landing_started_at = time.monotonic()
+        self.takeoff_safety.reset()
         self.flight_controller.set_target(
             landing_x,
             landing_y,
@@ -1529,8 +1638,10 @@ class CrazyflieNode(Node):
         self.takeoff_height_m = None
         self.test_feedforward = (0.0, 0.0, 0.0)
         self._clear_external_feedforward()
+        self.external_target_received_at = None
         self.telemetry_lost_at = None
         self.landing_started_at = None
+        self.takeoff_safety.reset()
         self.armed_at = None
         self.wand_active = False
         self.wand_reference_orientation = None
@@ -1569,6 +1680,7 @@ class CrazyflieNode(Node):
         return response
 
     def disconnect(self):
+        """Stop commands, telemetry, and the underlying hardware link."""
         self.control_timer.cancel()
 
         try:
@@ -1584,6 +1696,7 @@ class CrazyflieNode(Node):
 
 
 def main(args=None):
+    """Run a standalone single-vehicle controller."""
     rclpy.init(args=args)
     node = None
 

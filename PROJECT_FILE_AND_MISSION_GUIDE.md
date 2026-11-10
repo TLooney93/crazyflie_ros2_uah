@@ -1,5 +1,11 @@
 # Crazyflie Project File and Mission Guide
 
+> This is the detailed source-file catalog. Start with `ARCHITECTURE.md` for
+> current process ownership and data flow. Use
+> `MISSION_AND_PROFILE_AUTHORING_REFERENCE.md` for mission templates and
+> `LAUNCH_TEST_REFERENCE.md` for commands. The focused references are
+> authoritative if older details below disagree.
+
 This document explains the purpose of the active project files and how the
 current flight missions are assembled. Use `LAUNCH_TEST_REFERENCE.md` for
 terminal commands and `FLIGHT_TEST_REFERENCE.md` for the complete Vicon
@@ -69,12 +75,12 @@ It contains:
 - Controller rate and proportional gain.
 - Position and velocity limits.
 - Estimator and telemetry timeouts.
-- Autonomous mission height, timing, radius, tolerance, and landing values.
+- Shared mission defaults, takeoff/landing policy, and target bounds.
 - Wand topics, tilt threshold, repeat timing, step size, and travel boundary.
 - External-target bounds and swarm timing, tolerance, and separation limits.
 
-Change numeric tuning and mission geometry here when the mission structure is
-unchanged. Rebuild after modifying it.
+Change shared controller and safety tuning here. Put sequence-specific geometry
+and timing in the selected mission file. Rebuild after modifying either.
 
 ### `src/cf_control/cf_control/crazyflie_missions/`
 
@@ -113,7 +119,8 @@ it owns radio connections while `swarm_node` coordinates the mission.
 
 ### `src/cf_control/cf_control/flight_controller.py`
 
-Small proportional position controller.
+Small bounded PI position controller. The checked-in hardware baseline has
+`POSITION_KI = 0.0`, so it currently behaves as proportional-only control.
 
 It stores one `(x, y, z)` target and computes:
 
@@ -124,6 +131,13 @@ velocity = POSITION_KP * (target - current_position)
 Each axis is limited to `MAX_VELOCITY`. This file does not choose waypoints,
 manage state, or perform safety checks. Change it only when changing the
 control law itself.
+
+### `src/cf_control/cf_control/takeoff.py`
+
+Shared near-floor command shaping and takeoff safety monitoring. It limits
+horizontal correction near the ground and detects launch-column departure,
+insufficient climb, or sustained high thrust without progress. Single and
+swarm hardware both reach this policy through `CrazyflieNode`.
 
 ### `src/cf_control/cf_control/crazyflie_interface.py`
 
@@ -620,7 +634,7 @@ Swarm safety tuning remains in `config.py`:
 DEFAULT_SWARM_PROFILE = 'two_drone_lab'
 DEFAULT_SWARM_MISSION = 'two_drone_lab'
 SWARM_POSITION_TOLERANCE_M = 0.07
-SWARM_MIN_SEPARATION_M = 0.25
+SWARM_MIN_SEPARATION_M = 0.30
 SWARM_TAKEOFF_TIMEOUT_S = 20.0
 SWARM_MAX_FLIGHT_TIME_S = 90.0
 ```
@@ -656,7 +670,7 @@ For hardware, first fill the blank `cf3`, `cf4`, and `cf5` radio URIs and
 verify every Vicon subject name. The launcher deliberately refuses to start
 if any profile radio URI remains blank.
 
-## Change mission tuning without changing the sequence
+## Change shared flight tuning
 
 Edit `src/cf_control/cf_control/config.py`.
 
@@ -664,9 +678,6 @@ Common parameters:
 
 ```python
 FLIGHT_TEST_HEIGHT_M = 0.30
-FLIGHT_TEST_HOVER_S = 3.0
-FLIGHT_TEST_FIGURE_EIGHT_RADIUS_M = 0.35
-FLIGHT_TEST_FIGURE_EIGHT_DURATION_S = 20.0
 FLIGHT_TEST_POSITION_TOLERANCE_M = 0.08
 MAX_FLIGHT_TIME_S = 35.0
 MAX_VELOCITY = 0.3
@@ -681,7 +692,7 @@ Guidelines:
 - Keep `MAX_FLIGHT_TIME_S` longer than the planned mission plus landing time.
 - Larger `POSITION_KP` reacts more aggressively and can increase oscillation.
 - `MAX_VELOCITY` limits each axis separately, not total 3D speed.
-- Increasing figure-eight radius also increases the required clear area.
+- Change route-specific radius, offsets, and hold times in the mission file.
 - Always rebuild and rerun Gazebo after changing constants.
 
 ```bash
@@ -742,7 +753,7 @@ cfsim headless autonomous my_mission
 For hardware, the optional fifth `cfsingle` argument selects the mission:
 
 ```bash
-cfsingle cf1 vicon /vicon/cf231/cf231 "" my_mission
+cfsingle cf1 vicon /vicon/cf1/cf1 "" my_mission
 ```
 
 The fourth argument remains the optional radio URI override. Always run the

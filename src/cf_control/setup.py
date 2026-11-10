@@ -55,6 +55,7 @@ setup(
           'wand_driver_node = cf_control.wand_driver_node:main',
           'wand_gesture_node = cf_control.wand_gesture_node:main',
           'cfidentify = cf_control.identify_radio:main',
+          'cfpreflight = cf_control.preflight_check:main',
         ],
     },
 )
