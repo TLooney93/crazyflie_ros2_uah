@@ -949,10 +949,16 @@ class SwarmNode(Node):
         radius_m = trajectory['radius_m']
         height_m = trajectory['height_m']
         phase_step = 2.0 * math.pi / len(self.drone_ids)
+        start_angles_deg = trajectory.get('start_angles_deg')
         formation_targets = {}
         formation_velocities = {}
         for index, drone_id in enumerate(self.drone_ids):
-            drone_angle = math.pi + index * phase_step + angle
+            start_angle = (
+                math.radians(start_angles_deg[drone_id])
+                if start_angles_deg is not None
+                else math.pi + index * phase_step
+            )
+            drone_angle = start_angle + angle
             formation_targets[drone_id] = (
                 radius_m * math.cos(drone_angle),
                 radius_m * math.sin(drone_angle),

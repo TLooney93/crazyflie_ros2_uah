@@ -136,6 +136,7 @@ def load_swarm_mission(name, drone_ids):
             height_m = trajectory.get('height_m')
             duration_s = trajectory.get('duration_s')
             angle_deg = trajectory.get('angle_deg', 360.0)
+            start_angles_deg = trajectory.get('start_angles_deg')
             if not all(
                 isinstance(value, (int, float)) and math.isfinite(value)
                 for value in (radius_m, height_m, duration_s, angle_deg)
@@ -161,6 +162,15 @@ def load_swarm_mission(name, drone_ids):
                     f'Phase {phase_name!r} trajectory angle must be in '
                     '(0, 360] degrees'
                 )
+            if start_angles_deg is not None:
+                if set(start_angles_deg) != expected_ids or not all(
+                    isinstance(value, (int, float)) and math.isfinite(value)
+                    for value in start_angles_deg.values()
+                ):
+                    raise ValueError(
+                        f'Phase {phase_name!r} start_angles_deg must contain '
+                        'one finite angle per drone'
+                    )
             continue
 
         for drone_id, offset in coordinates.items():

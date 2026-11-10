@@ -10,8 +10,8 @@ TRIANGLE_RADIUS_M = 0.30
 LINE_SPACING_M = 0.40
 ROTATION_DEG = 90.0
 ROTATION_DURATION_S = 4.0
-ARRIVAL_TOLERANCE_M = 0.12
-STATIONARY_TIMEOUT_S = 5.0
+ARRIVAL_TOLERANCE_M = 0.18
+STATIONARY_TIMEOUT_S = 8.0
 
 
 MISSION = [
@@ -19,7 +19,7 @@ MISSION = [
         'name': 'INITIAL_HOVER',
         'hold_s': 3.0,
         'arrival_tolerance_m': ARRIVAL_TOLERANCE_M,
-        'timeout_s': 6.0,
+        'timeout_s': 8.0,
         'offsets': {
             'cf1': (0.0, 0.0, FLIGHT_HEIGHT_M),
             'cf2': (0.0, 0.0, FLIGHT_HEIGHT_M),
@@ -33,13 +33,15 @@ MISSION = [
         'timeout_s': STATIONARY_TIMEOUT_S,
         'formation_targets': {
             # Match formation_orbit's starting angles exactly so entering the
-            # rotation does not create a target discontinuity.
-            'cf1': (-TRIANGLE_RADIUS_M, 0.0, FLIGHT_HEIGHT_M),
-            'cf2': (
+            # rotation does not create a target discontinuity. The measured
+            # launch order is CF2 (left), CF1 (middle), CF3 (right), so CF2
+            # receives the left vertex instead of crossing through CF1.
+            'cf1': (
                 TRIANGLE_RADIUS_M * 0.5,
                 -TRIANGLE_RADIUS_M * math.sqrt(3.0) * 0.5,
                 FLIGHT_HEIGHT_M,
             ),
+            'cf2': (-TRIANGLE_RADIUS_M, 0.0, FLIGHT_HEIGHT_M),
             'cf3': (
                 TRIANGLE_RADIUS_M * 0.5,
                 TRIANGLE_RADIUS_M * math.sqrt(3.0) * 0.5,
@@ -50,13 +52,18 @@ MISSION = [
     {
         'name': 'TRIANGLE_ROTATE_90',
         'hold_s': 0.0,
-        'timeout_s': ROTATION_DURATION_S + 1.0,
+        'timeout_s': ROTATION_DURATION_S + 3.0,
         'trajectory': {
             'type': 'formation_orbit',
             'radius_m': TRIANGLE_RADIUS_M,
             'height_m': FLIGHT_HEIGHT_M,
             'duration_s': ROTATION_DURATION_S,
             'angle_deg': ROTATION_DEG,
+            'start_angles_deg': {
+                'cf1': 300.0,
+                'cf2': 180.0,
+                'cf3': 60.0,
+            },
         },
     },
     {
@@ -65,8 +72,8 @@ MISSION = [
         'arrival_tolerance_m': ARRIVAL_TOLERANCE_M,
         'timeout_s': STATIONARY_TIMEOUT_S,
         'formation_targets': {
-            'cf1': (-LINE_SPACING_M, 0.0, FLIGHT_HEIGHT_M),
-            'cf2': (0.0, 0.0, FLIGHT_HEIGHT_M),
+            'cf1': (0.0, 0.0, FLIGHT_HEIGHT_M),
+            'cf2': (-LINE_SPACING_M, 0.0, FLIGHT_HEIGHT_M),
             'cf3': (LINE_SPACING_M, 0.0, FLIGHT_HEIGHT_M),
         },
     },

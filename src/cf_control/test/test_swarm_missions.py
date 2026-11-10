@@ -3,7 +3,10 @@
 import math
 from types import SimpleNamespace
 
-from cf_control.config import SWARM_MIN_SEPARATION_M
+from cf_control.config import (
+    SWARM_ALTITUDE_VIOLATION_S,
+    SWARM_MIN_SEPARATION_M,
+)
 from cf_control.swarm_missions import load_swarm_mission
 from cf_control.swarm_node import SwarmNode
 
@@ -184,9 +187,9 @@ def test_three_drone_rotation_ends_at_ninety_degrees():
     node = object.__new__(SwarmNode)
     node.drone_ids = ['cf1', 'cf2', 'cf3']
     node.home_positions = {
-        'cf1': (-0.8, 0.0, 0.04),
-        'cf2': (0.0, 0.0, 0.04),
-        'cf3': (0.8, 0.0, 0.04),
+        'cf1': (0.0, 0.0, 0.04),
+        'cf2': (-0.9, 0.0, 0.04),
+        'cf3': (0.9, 0.0, 0.04),
     }
     phase = load_swarm_mission(
         'three_drone_demo', node.drone_ids,
@@ -197,9 +200,52 @@ def test_three_drone_rotation_ends_at_ninety_degrees():
         phase, phase['trajectory']['duration_s'],
     )
 
-    assert start['cf1'][:2] == pytest.approx((-0.3, 0.0))
-    assert end['cf1'][:2] == pytest.approx((0.0, -0.3))
+    triangle_height = 0.3 * math.sqrt(3.0) * 0.5
+    assert start['cf1'][:2] == pytest.approx((0.15, -triangle_height))
+    assert start['cf2'][:2] == pytest.approx((-0.3, 0.0))
+    assert start['cf3'][:2] == pytest.approx((0.15, triangle_height))
+    assert end['cf1'][:2] == pytest.approx((triangle_height, 0.15))
     assert math.dist(end['cf1'], end['cf2']) > SWARM_MIN_SEPARATION_M
+
+
+def test_three_drone_slots_fit_measured_launch_order_and_workspace():
+    """CF2/CF1/CF3 must move locally instead of crossing the formation."""
+    node = object.__new__(SwarmNode)
+    node.drone_ids = ['cf1', 'cf2', 'cf3']
+    node.home_positions = {
+        'cf1': (-0.009, -0.106, 0.045),
+        'cf2': (-0.923, -0.113, 0.067),
+        'cf3': (0.987, -0.069, 0.029),
+    }
+    phases = load_swarm_mission('three_drone_demo', node.drone_ids)
+    triangle = node._targets_for_phase(phases[1])
+    orbit_start = node._targets_for_phase(phases[2])
+    line = node._targets_for_phase(phases[3])
+
+    assert all(
+        triangle[drone_id] == pytest.approx(orbit_start[drone_id])
+        for drone_id in node.drone_ids
+    )
+    center, along, _ = node._formation_frame()
+    projected = []
+    for targets in (triangle, line):
+        projected.append({
+            drone_id: (
+                (targets[drone_id][0] - center[0]) * along[0]
+                + (targets[drone_id][1] - center[1]) * along[1]
+            )
+            for drone_id in node.drone_ids
+        })
+    triangle_along, line_along = projected
+    assert triangle_along['cf2'] < triangle_along['cf1']
+    assert triangle_along['cf1'] == pytest.approx(triangle_along['cf3'])
+    assert line_along['cf2'] < line_along['cf1'] < line_along['cf3']
+    for targets in (triangle, line):
+        assert all(
+            math.dist(targets[drone_id][:2], node.home_positions[drone_id][:2])
+            < 0.95
+            for drone_id in node.drone_ids
+        )
 
 
 def test_staged_phase_arrival_ignores_grounded_members():
@@ -417,6 +463,8 @@ def test_sustained_altitude_collapse_is_reported():
     node.altitude_violation_started_at = {}
 
     assert node._altitude_safety_error(10.0) is None
-    error = node._altitude_safety_error(10.5)
+    error = node._altitude_safety_error(
+        10.0 + SWARM_ALTITUDE_VIOLATION_S + 0.1,
+    )
 
     assert 'Sustained altitude loss: cf1' in error

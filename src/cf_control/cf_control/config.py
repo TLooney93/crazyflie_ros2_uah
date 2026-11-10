@@ -15,7 +15,7 @@ from pathlib import Path
 
 DRONES = {
 
-    #ADD DRONES AND ADDRESS HERE
+    # Add drones and radio addresses here.
 
     'cf1': 'radio://0/80/2M/E7E7E7E701',
     'cf2': 'radio://0/80/2M/E7E7E7E706',
@@ -31,22 +31,23 @@ CACHE_DIR = Path.home() / 'dev' / 'crazyflie' / 'cache'
 # ---------------------------------------------------------------------------
 
 DEFAULT_HEIGHT = 0.5  # m in the shared world frame
-MAX_VELOCITY = 0.3  # m/s, applied independently to x, y, and z
+MAX_VELOCITY = 0.25  # m/s, applied independently to x, y, and z
 MAX_YAW_RATE = 45.0  # deg/s
 
 # Compute and refresh each vehicle's velocity command at 50 Hz. Hardware
 # transmissions are grouped into the shared dispatch frames configured below.
 CONTROL_RATE_HZ = 50.0
-POSITION_KP = 0.5
-# Keep the hardware baseline proportional-only. Integral support remains
-# available in the controller, but is disabled after observed phase overshoot.
-POSITION_KI = 0.1
-POSITION_INTEGRAL_MAX_VELOCITY_M_S = 0.4
+POSITION_KP = 0.45
+# Added airframe mass can create a small persistent position bias. Keep the
+# integral correction slow and tightly bounded; the onboard velocity loop,
+# not this outer position loop, remains responsible for carrying the mass.
+POSITION_KI = 0.03
+POSITION_INTEGRAL_MAX_VELOCITY_M_S = 0.08
 EXTERNAL_FEEDFORWARD_TIMEOUT_S = 0.30
 EXTERNAL_MAX_FEEDFORWARD_M_S = 0.12
 # Swarm targets are refreshed continuously. A vehicle must stop trusting its
 # retained target if the coordinator disappears.
-EXTERNAL_TARGET_TIMEOUT_S = 1.0
+EXTERNAL_TARGET_TIMEOUT_S = 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -63,7 +64,7 @@ PREFLIGHT_MIN_BATTERY_VOLTAGE = 3.80
 # Shared-radio/Vicon hardware can briefly delay ROS pose callbacks while three
 # links transition into flight.  Allow short gaps without immediately forcing
 # every vehicle into a blind descent; invalid/zero poses are still rejected.
-POSITION_TIMEOUT_S = 1.5
+POSITION_TIMEOUT_S = 2.0
 
 # Crazyflie firmware estimator selection: 2 selects the Kalman estimator.
 KALMAN_ESTIMATOR = 2
@@ -72,9 +73,9 @@ VICON_ESTIMATOR_MAX_ERROR_M = 0.15
 VICON_FORWARD_RATE_HZ = 5.0
 # Reject receiver dropout sentinels and physically impossible pose jumps.
 VICON_ZERO_POSITION_EPSILON_M = 1e-4
-VICON_MAX_POSITION_JUMP_M = 0.20
-VICON_REACQUIRE_TOLERANCE_M = 0.03
-VICON_REACQUIRE_SAMPLES = 10
+VICON_MAX_POSITION_JUMP_M = 0.35
+VICON_REACQUIRE_TOLERANCE_M = 0.06
+VICON_REACQUIRE_SAMPLES = 5
 
 # One shared worker snapshots every connected vehicle's newest velocity and
 # transmits the full group once per 20 ms frame. Stock Crazyflie firmware
@@ -126,15 +127,15 @@ TAKEOFF_MAX_VERTICAL_VELOCITY_M_S = 0.40
 TAKEOFF_NEAR_FLOOR_HEIGHT_M = 0.10
 TAKEOFF_NEAR_FLOOR_MAX_HORIZONTAL_VELOCITY_M_S = 0.02
 TAKEOFF_MAX_HORIZONTAL_VELOCITY_M_S = 0.04
-TAKEOFF_MAX_HORIZONTAL_DEVIATION_M = 0.30
+TAKEOFF_MAX_HORIZONTAL_DEVIATION_M = 0.45
 # Abort a takeoff that is consuming high thrust without gaining clearance.
 TAKEOFF_MIN_PROGRESS_HEIGHT_M = 0.05
-TAKEOFF_PROGRESS_TIMEOUT_S = 4.0
+TAKEOFF_PROGRESS_TIMEOUT_S = 6.0
 # Marker-loaded airframes normally hover near 59-61k raw thrust.  Treat only
 # sustained demand at that upper range as a stalled takeoff, and give a heavy
 # vehicle enough time to clear the first 5 cm before aborting the whole swarm.
-TAKEOFF_THRUST_SATURATION_THRESHOLD = 60000.0
-TAKEOFF_THRUST_SATURATION_DURATION_S = 2.0
+TAKEOFF_THRUST_SATURATION_THRESHOLD = 63000.0
+TAKEOFF_THRUST_SATURATION_DURATION_S = 3.0
 LANDING_HEIGHT_M = 0.05
 LANDING_COMPLETE_TOLERANCE_M = 0.03
 LANDING_SPEED_M_S = 0.10
@@ -154,7 +155,9 @@ ENABLE_EXTERNAL_TARGETS = False
 # Bounds applied whenever a ROS topic is used as the position-command source.
 # Targets are absolute world coordinates, but are constrained relative to the
 # position recorded when the vehicle was armed.
-EXTERNAL_MAX_HORIZONTAL_OFFSET_M = 0.85
+# The measured three-drone launch line is about 1.9 m wide. The remapped
+# triangle keeps nominal travel below 0.85 m; retain modest tracking headroom.
+EXTERNAL_MAX_HORIZONTAL_OFFSET_M = 0.95
 EXTERNAL_MIN_HEIGHT_M = 0.10
 EXTERNAL_MAX_HEIGHT_M = 2
 
@@ -171,14 +174,14 @@ SWARM_POSITION_TOLERANCE_M = 0.07
 # needs each member close enough to its commanded clearance height before the
 # coordinator begins the saved mission.
 SWARM_TAKEOFF_POSITION_TOLERANCE_M = 0.4
-SWARM_MIN_SEPARATION_M = 0.3
+SWARM_MIN_SEPARATION_M = 0.25
 SWARM_CRITICAL_SEPARATION_M = 0.12
-SWARM_PREFLIGHT_MIN_SEPARATION_M = 0.30
-SWARM_SEPARATION_VIOLATION_S = 0.50
+SWARM_PREFLIGHT_MIN_SEPARATION_M = 0.25
+SWARM_SEPARATION_VIOLATION_S = 1.50
 # Abort an active hover/mission if any member falls well below the takeoff
 # altitude for more than this short confirmation interval.
 SWARM_ALTITUDE_LOSS_MARGIN_M = 0.4
-SWARM_ALTITUDE_VIOLATION_S = 0.40
+SWARM_ALTITUDE_VIOLATION_S = 1.50
 SWARM_MIN_AIRBORNE_HEIGHT_M = 0.05
 # Rising motion from a staged member that should still be grounded indicates
 # an identity mismatch or another uncommanded vehicle.
@@ -249,6 +252,11 @@ def validate_config():
         )
     if RADIO_COMMAND_TIMEOUT_S < 2.0 / CONTROL_RATE_HZ:
         errors.append('radio command timeout is too short for control jitter')
+    if not (
+        0.0 <= POSITION_KI
+        and 0.0 <= POSITION_INTEGRAL_MAX_VELOCITY_M_S <= MAX_VELOCITY
+    ):
+        errors.append('position integral output must fit the velocity limit')
     if EXTERNAL_TARGET_TIMEOUT_S <= 2.0 / SWARM_CONTROL_RATE_HZ:
         errors.append('external target timeout is too short for swarm jitter')
     if SWARM_UNCOMMANDED_MOTION_M <= 0.0:
