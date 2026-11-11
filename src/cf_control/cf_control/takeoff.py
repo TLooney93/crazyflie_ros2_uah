@@ -15,11 +15,32 @@ def ground_effect_takeoff_boost(
     height_above_floor_m,
     boost_end_height_m,
     boost_m_s,
+    taper_start_height_m=None,
 ):
-    """Return the vertical boost used below ``boost_end_height_m``."""
-    if height_above_floor_m < boost_end_height_m:
+    """Return a launch boost that tapers continuously above ground effect."""
+    if taper_start_height_m is None:
+        return boost_m_s if height_above_floor_m < boost_end_height_m else 0.0
+    if height_above_floor_m <= taper_start_height_m:
         return boost_m_s
-    return 0.0
+    if height_above_floor_m >= boost_end_height_m:
+        return 0.0
+    taper_height_m = boost_end_height_m - taper_start_height_m
+    if taper_height_m <= 0.0:
+        return 0.0
+    remaining = boost_end_height_m - height_above_floor_m
+    return boost_m_s * remaining / taper_height_m
+
+
+def _ramped_limit(elapsed_s, transition_start_s, transition_s, high, low):
+    """Blend a command limit from ``high`` to ``low`` without a step."""
+    if elapsed_s < transition_start_s:
+        return high
+    if transition_s <= 0.0:
+        return low
+    if elapsed_s >= transition_start_s + transition_s:
+        return low
+    progress = (elapsed_s - transition_start_s) / transition_s
+    return high + progress * (low - high)
 
 
 def limit_horizontal_velocity(vx, vy, max_velocity):
@@ -39,13 +60,21 @@ def takeoff_horizontal_velocity_limit(
     near_floor_height_m,
     near_floor_limit_m_s,
     airborne_limit_m_s,
+    ramp_down_s=0.0,
 ):
     """Return the horizontal speed limit for the current takeoff height."""
-    if takeoff_elapsed_s < grace_period_s:
-        return grace_limit_m_s
-    if height_above_floor_m < near_floor_height_m:
-        return near_floor_limit_m_s
-    return airborne_limit_m_s
+    normal_limit = (
+        near_floor_limit_m_s
+        if height_above_floor_m < near_floor_height_m
+        else airborne_limit_m_s
+    )
+    return _ramped_limit(
+        takeoff_elapsed_s,
+        grace_period_s,
+        ramp_down_s,
+        grace_limit_m_s,
+        normal_limit,
+    )
 
 
 def takeoff_vertical_velocity_limit(
@@ -53,11 +82,16 @@ def takeoff_vertical_velocity_limit(
     grace_period_s,
     grace_limit_m_s,
     normal_limit_m_s,
+    ramp_down_s=0.0,
 ):
-    """Return the higher vertical cap only during launch assistance."""
-    if takeoff_elapsed_s < grace_period_s:
-        return grace_limit_m_s
-    return normal_limit_m_s
+    """Blend the launch-assistance vertical cap into its normal value."""
+    return _ramped_limit(
+        takeoff_elapsed_s,
+        grace_period_s,
+        ramp_down_s,
+        grace_limit_m_s,
+        normal_limit_m_s,
+    )
 
 
 @dataclass(frozen=True)

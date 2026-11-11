@@ -125,7 +125,8 @@ def test_orbit_targets_share_measured_formation_midpoint():
     assert math.dist(targets['cf1'][:2], targets['cf2'][:2]) == pytest.approx(
         0.60
     )
-    expected_speed = 2.0 * math.pi * 0.30 / 30.0
+    smooth_rate_scale = 6.0 * 0.25 * 0.75
+    expected_speed = 2.0 * math.pi * 0.30 / 30.0 * smooth_rate_scale
     assert math.hypot(*feedforwards['cf1'][:2]) == pytest.approx(
         expected_speed
     )
@@ -195,17 +196,25 @@ def test_three_drone_rotation_ends_at_ninety_degrees():
         'three_drone_demo', node.drone_ids,
     )[2]
 
-    start, _ = node._trajectory_commands(phase, 0.0)
-    end, _ = node._trajectory_commands(
+    start, start_velocity = node._trajectory_commands(phase, 0.0)
+    end, end_velocity = node._trajectory_commands(
         phase, phase['trajectory']['duration_s'],
     )
 
-    triangle_height = 0.3 * math.sqrt(3.0) * 0.5
-    assert start['cf1'][:2] == pytest.approx((0.15, -triangle_height))
-    assert start['cf2'][:2] == pytest.approx((-0.3, 0.0))
-    assert start['cf3'][:2] == pytest.approx((0.15, triangle_height))
-    assert end['cf1'][:2] == pytest.approx((triangle_height, 0.15))
+    triangle_height = 0.4 * math.sqrt(3.0) * 0.5
+    assert start['cf1'][:2] == pytest.approx((0.2, -triangle_height))
+    assert start['cf2'][:2] == pytest.approx((-0.4, 0.0))
+    assert start['cf3'][:2] == pytest.approx((0.2, triangle_height))
+    assert end['cf1'][:2] == pytest.approx((triangle_height, 0.2))
     assert math.dist(end['cf1'], end['cf2']) > SWARM_MIN_SEPARATION_M
+    assert all(
+        velocity == pytest.approx((0.0, 0.0, 0.0))
+        for velocity in start_velocity.values()
+    )
+    assert all(
+        velocity == pytest.approx((0.0, 0.0, 0.0))
+        for velocity in end_velocity.values()
+    )
 
 
 def test_three_drone_slots_fit_measured_launch_order_and_workspace():
@@ -267,7 +276,7 @@ def test_staged_phase_arrival_ignores_grounded_members():
         'cf3': (2.0, 0.0, 0.0),
     }
     node.positions = {
-        'cf1': (0.0, 0.0, 0.30),
+        'cf1': (0.0, 0.0, 1.0),
         'cf2': (1.0, 0.0, 0.0),
         'cf3': (2.0, 0.0, 0.0),
     }
@@ -278,6 +287,22 @@ def test_staged_phase_arrival_ignores_grounded_members():
 
     assert node.phase_arrived_drones == {'cf1'}
     assert node.phase_arrived_at == pytest.approx(10.1)
+
+
+def test_stationary_phase_target_blend_has_continuous_endpoints():
+    """Phase target motion starts and ends without a position step."""
+    node = object.__new__(SwarmNode)
+    node.phase_entry_targets = {'cf1': (0.0, 0.0, 0.30)}
+    phase = {'transition_s': 4.0}
+    final = {'cf1': (0.4, -0.2, 1.0)}
+
+    start = node._smooth_phase_targets(phase, final, 0.0)
+    midpoint = node._smooth_phase_targets(phase, final, 2.0)
+    end = node._smooth_phase_targets(phase, final, 4.0)
+
+    assert start['cf1'] == (0.0, 0.0, 0.30)
+    assert midpoint['cf1'] == pytest.approx((0.2, -0.1, 0.65))
+    assert end == final
 
 
 def test_staged_mission_rejects_rising_inactive_member():

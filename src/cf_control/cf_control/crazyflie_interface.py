@@ -24,8 +24,8 @@ class RadioCommandDispatcher:
         rate_hz=RADIO_COMMAND_RATE_HZ,
         command_timeout_s=RADIO_COMMAND_TIMEOUT_S,
     ):
-        if not math.isfinite(rate_hz) or rate_hz < 50.0:
-            raise ValueError('shared radio command rate must be at least 50 Hz')
+        if not math.isfinite(rate_hz) or rate_hz < 25.0:
+            raise ValueError('shared radio command rate must be at least 25 Hz')
         if (
             not math.isfinite(command_timeout_s)
             or command_timeout_s <= 0.0

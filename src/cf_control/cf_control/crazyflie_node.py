@@ -16,6 +16,7 @@ from cf_control.config import (
     EXTERNAL_MAX_HEIGHT_M,
     EXTERNAL_MAX_HORIZONTAL_OFFSET_M,
     EXTERNAL_MIN_HEIGHT_M,
+    EXTERNAL_TARGET_LOG_PERIOD_S,
     EXTERNAL_TARGET_TIMEOUT_S,
     FLIGHT_TEST_HEIGHT_M,
     FLIGHT_TEST_POSITION_TOLERANCE_M,
@@ -31,11 +32,14 @@ from cf_control.config import (
     POSITION_KP,
     POSITION_TIMEOUT_S,
     PREFLIGHT_MIN_BATTERY_VOLTAGE,
+    TAKEOFF_ASSIST_GRACE_S,
+    TAKEOFF_ASSIST_RAMP_DOWN_S,
     TAKEOFF_BOOST_END_HEIGHT_M,
     TAKEOFF_BOOST_M_S,
-    TAKEOFF_ASSIST_GRACE_S,
+    TAKEOFF_BOOST_TAPER_START_HEIGHT_M,
     TAKEOFF_GRACE_MAX_HORIZONTAL_VELOCITY_M_S,
     TAKEOFF_GRACE_MAX_VERTICAL_VELOCITY_M_S,
+    TAKEOFF_HEIGHT_TOLERANCE_M,
     TAKEOFF_MAX_HORIZONTAL_DEVIATION_M,
     TAKEOFF_MAX_HORIZONTAL_VELOCITY_M_S,
     TAKEOFF_MAX_VERTICAL_VELOCITY_M_S,
@@ -47,10 +51,13 @@ from cf_control.config import (
     TAKEOFF_THRUST_SATURATION_THRESHOLD,
     TELEMETRY_LOSS_DESCENT_S,
     TELEMETRY_PERIOD_MS,
+    TELEMETRY_RESTART_BACKOFF_MAX_S,
+    TELEMETRY_RESTART_TIMEOUT_S,
     VALID_WAND_GESTURES,
     VICON_ESTIMATOR_MAX_ERROR_M,
     VICON_FORWARD_RATE_HZ,
     VICON_MAX_POSITION_JUMP_M,
+    VICON_POSITION_MEDIAN_SAMPLES,
     VICON_REACQUIRE_SAMPLES,
     VICON_REACQUIRE_TOLERANCE_M,
     VICON_ZERO_POSITION_EPSILON_M,
@@ -79,6 +86,7 @@ from cf_control.takeoff import (
     takeoff_vertical_velocity_limit,
 )
 from cf_control.telemetry import TelemetryReader
+from cf_control.vicon_filter import ViconPositionFilter
 from cf_control.wand_control import gesture_action, tilt_to_unit_offset
 
 import cflib.crtp
@@ -229,11 +237,13 @@ class CrazyflieNode(Node):
         self.estimator_samples = 0
         self.battery_voltage = None
         self.battery_voltage_received_at = None
-        self.attitude_degrees = None
         self.stabilizer_thrust = None
         self.position_lock = Lock()
         self.vicon_received_at = None
         self.vicon_position = None
+        self.vicon_position_filter = ViconPositionFilter(
+            VICON_POSITION_MEDIAN_SAMPLES
+        )
         self.vicon_consecutive_valid_samples = 0
         self.vicon_tracking_invalid = False
         self.vicon_reacquire_position = None
@@ -286,6 +296,8 @@ class CrazyflieNode(Node):
         self.external_feedforward = (0.0, 0.0, 0.0)
         self.external_feedforward_received_at = None
         self.external_target_received_at = None
+        self.last_target_log_at = 0.0
+        self.last_target_warning_at = 0.0
         self.telemetry_lost_at = None
         self.landing_started_at = None
         self.takeoff_safety = TakeoffSafetyMonitor(
@@ -390,8 +402,8 @@ class CrazyflieNode(Node):
                 self.scf,
                 callback=self._on_position,
                 period_ms=TELEMETRY_PERIOD_MS,
-                include_attitude=True,
-                include_thrust=True,
+                restart_timeout_s=TELEMETRY_RESTART_TIMEOUT_S,
+                restart_backoff_max_s=TELEMETRY_RESTART_BACKOFF_MAX_S,
             )
 
         self.velocity_debug_pub = self.create_publisher(
@@ -484,9 +496,9 @@ class CrazyflieNode(Node):
         horizontal_offset = math.hypot(msg.x - home_x, msg.y - home_y)
         relative_height = msg.z - floor_z
         if horizontal_offset > EXTERNAL_MAX_HORIZONTAL_OFFSET_M:
-            self.get_logger().warning(
+            self._log_target_warning(
                 'Ignoring target: horizontal offset exceeds '
-                f'{EXTERNAL_MAX_HORIZONTAL_OFFSET_M:.2f} m'
+                f'{EXTERNAL_MAX_HORIZONTAL_OFFSET_M:.2f} m',
             )
             return
         if not (
@@ -507,12 +519,29 @@ class CrazyflieNode(Node):
             msg.y,
             msg.z
         )
-        self.external_target_received_at = time.monotonic()
+        received_at = time.monotonic()
+        self.external_target_received_at = received_at
 
-        if previous_target != target:
+        if (
+            previous_target != target
+            and received_at - self.last_target_log_at
+            >= EXTERNAL_TARGET_LOG_PERIOD_S
+        ):
             self.get_logger().info(
                 f'Target stored: {msg.x}, {msg.y}, {msg.z}'
             )
+            self.last_target_log_at = received_at
+
+    def _log_target_warning(self, message):
+        """Rate-limit repeated target rejection warnings."""
+        now = time.monotonic()
+        if (
+            now - self.last_target_warning_at
+            < EXTERNAL_TARGET_LOG_PERIOD_S
+        ):
+            return
+        self.get_logger().warning(message)
+        self.last_target_warning_at = now
 
     def feedforward_callback(self, msg):
         """Store a bounded, short-lived external velocity feedforward."""
@@ -964,20 +993,20 @@ class CrazyflieNode(Node):
         """Validate and forward Vicon position to the onboard estimator."""
         received_at = time.monotonic()
         self.vicon_raw_samples += 1
-        position = (
+        raw_position = (
             float(msg.pose.position.x),
             float(msg.pose.position.y),
             float(msg.pose.position.z),
         )
 
-        if not all(math.isfinite(value) for value in position):
+        if not all(math.isfinite(value) for value in raw_position):
             self._reject_vicon_position(
                 received_at,
                 'non-finite Vicon position',
             )
             return
 
-        if max(abs(value) for value in position) <= (
+        if max(abs(value) for value in raw_position) <= (
             VICON_ZERO_POSITION_EPSILON_M
         ):
             self._reject_vicon_position(
@@ -986,13 +1015,19 @@ class CrazyflieNode(Node):
             )
             return
 
-        if not self._vicon_jump_is_acceptable(position):
-            if not self._try_reacquire_vicon(position):
+        reacquired = False
+        if not self._vicon_jump_is_acceptable(raw_position):
+            reacquired = self._try_reacquire_vicon(raw_position)
+            if not reacquired:
                 self._reject_vicon_position(
                     received_at,
                     'implausible Vicon position jump',
                 )
                 return
+
+        if reacquired:
+            self.vicon_position_filter.reset(raw_position)
+        position = self.vicon_position_filter.update(raw_position)
 
         if self.vicon_tracking_invalid:
             self.get_logger().info('Vicon position tracking recovered')
@@ -1100,7 +1135,6 @@ class CrazyflieNode(Node):
             estimator_rate = self.estimator_samples / elapsed
             estimator_received_at = self.estimator_position_received_at
             battery_voltage = self.battery_voltage
-            attitude_degrees = self.attitude_degrees
             stabilizer_thrust = self.stabilizer_thrust
             self.estimator_samples = 0
         estimator_age = (
@@ -1109,15 +1143,27 @@ class CrazyflieNode(Node):
             else float('inf')
         )
         health_text = ''
-        if battery_voltage is not None and attitude_degrees is not None:
-            health_text = (
-                f'; battery {battery_voltage:.2f} V; attitude '
-                f'roll={attitude_degrees[0]:.1f}, '
-                f'pitch={attitude_degrees[1]:.1f}, '
-                f'yaw={attitude_degrees[2]:.1f} deg'
-            )
+        if battery_voltage is not None:
+            health_text = f'; battery {battery_voltage:.2f} V'
         if stabilizer_thrust is not None:
             health_text += f'; thrust {stabilizer_thrust:.1f}'
+        if self.telemetry is not None:
+            telemetry_statistics = self.telemetry.consume_statistics()
+            if telemetry_statistics['dropped']:
+                health_text += (
+                    f'; telemetry replaced '
+                    f'{telemetry_statistics["dropped"]} stale samples'
+                )
+            if telemetry_statistics['restarts']:
+                health_text += (
+                    f'; telemetry restarts '
+                    f'{telemetry_statistics["restarts"]}'
+                )
+            if telemetry_statistics['error']:
+                health_text += (
+                    f'; telemetry error '
+                    f'{telemetry_statistics["error"]}'
+                )
         self.get_logger().info(
             f'Vicon rates: input {raw_rate:.1f} Hz, '
             f'forwarded {forward_rate:.1f} Hz; '
@@ -1140,14 +1186,6 @@ class CrazyflieNode(Node):
         stabilizer_thrust = float(
             data.get('stabilizer.thrust', float('nan'))
         )
-        attitude = tuple(
-            float(data.get(name, float('nan')))
-            for name in (
-                'stabilizer.roll',
-                'stabilizer.pitch',
-                'stabilizer.yaw',
-            )
-        )
         with self.position_lock:
             self.estimator_position = position if valid else None
             self.estimator_position_received_at = (
@@ -1160,11 +1198,6 @@ class CrazyflieNode(Node):
             )
             self.battery_voltage_received_at = (
                 received_at if math.isfinite(battery_voltage) else None
-            )
-            self.attitude_degrees = (
-                attitude
-                if all(math.isfinite(value) for value in attitude)
-                else None
             )
             self.stabilizer_thrust = (
                 stabilizer_thrust
@@ -1347,6 +1380,7 @@ class CrazyflieNode(Node):
                 height_above_floor_m,
                 TAKEOFF_BOOST_END_HEIGHT_M,
                 TAKEOFF_BOOST_M_S,
+                TAKEOFF_BOOST_TAPER_START_HEIGHT_M,
             )
         vx = max(-MAX_VELOCITY, min(vx, MAX_VELOCITY))
         vy = max(-MAX_VELOCITY, min(vy, MAX_VELOCITY))
@@ -1361,6 +1395,7 @@ class CrazyflieNode(Node):
                 TAKEOFF_ASSIST_GRACE_S,
                 TAKEOFF_GRACE_MAX_VERTICAL_VELOCITY_M_S,
                 TAKEOFF_MAX_VERTICAL_VELOCITY_M_S,
+                TAKEOFF_ASSIST_RAMP_DOWN_S,
             )
         else:
             vertical_velocity_limit = MAX_VELOCITY
@@ -1378,6 +1413,7 @@ class CrazyflieNode(Node):
                 TAKEOFF_NEAR_FLOOR_HEIGHT_M,
                 TAKEOFF_NEAR_FLOOR_MAX_HORIZONTAL_VELOCITY_M_S,
                 TAKEOFF_MAX_HORIZONTAL_VELOCITY_M_S,
+                TAKEOFF_ASSIST_RAMP_DOWN_S,
             )
             vx, vy = limit_horizontal_velocity(
                 vx,
@@ -1525,7 +1561,7 @@ class CrazyflieNode(Node):
         )
         return (
             abs(position[2] - flight_z)
-            <= FLIGHT_TEST_POSITION_TOLERANCE_M
+            <= TAKEOFF_HEIGHT_TOLERANCE_M
             and horizontal_deviation_m
             <= TAKEOFF_MAX_HORIZONTAL_DEVIATION_M
         )

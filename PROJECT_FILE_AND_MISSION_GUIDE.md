@@ -172,12 +172,12 @@ conditions.
 
 ### `src/cf_control/cf_control/telemetry.py`
 
-Background cflib telemetry reader.
-
-For the receiver drone it reads `stateEstimate.x/y/z`. With
-`include_attitude=True`, the physical wand driver also reads stabilizer roll,
-pitch, and yaw. It keeps only the newest sample so delayed telemetry does not
-build up in a queue.
+Bounded cflib telemetry transport. The flight profile uses one 10-byte block
+containing FP16 `stateEstimate.x/y/z`, battery voltage, and thrust at 2 Hz.
+Attitude is not requested during flight. The physical wand selects a separate
+position-and-attitude profile. Both profiles keep only the newest sample, and
+silent-stream recovery uses bounded exponential backoff instead of repeatedly
+allocating log blocks.
 
 ### `src/cf_control/cf_control/lighthouse.py`
 

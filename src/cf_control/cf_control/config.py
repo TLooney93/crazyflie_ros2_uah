@@ -17,10 +17,11 @@ DRONES = {
 
     # Add drones and radio addresses here.
 
-    'cf1': 'radio://0/80/2M/E7E7E7E701',
-    'cf2': 'radio://0/80/2M/E7E7E7E706',
-    'cf3': 'radio://0/80/2M/E7E7E7E708',
+    'cf1': 'radio://0/80/2M/E7E7E7E704',
+    'cf2': 'radio://0/80/2M/E7E7E7E710',
+    'cf3': 'radio://0/80/2M/E7E7E7E702',
     # 'cfw': 'radio://0/80/2M/E7E7E7E7E1',
+    #'cf7': 'radio://0/80/2M/E7E7E7E707',
 }
 
 CACHE_DIR = Path.home() / 'dev' / 'crazyflie' / 'cache'
@@ -37,26 +38,34 @@ MAX_YAW_RATE = 45.0  # deg/s
 # Compute and refresh each vehicle's velocity command at 50 Hz. Hardware
 # transmissions are grouped into the shared dispatch frames configured below.
 CONTROL_RATE_HZ = 50.0
-POSITION_KP = 0.45
+POSITION_KP = 0.3
 # Added airframe mass can create a small persistent position bias. Keep the
 # integral correction slow and tightly bounded; the onboard velocity loop,
 # not this outer position loop, remains responsible for carrying the mass.
-POSITION_KI = 0.03
-POSITION_INTEGRAL_MAX_VELOCITY_M_S = 0.08
+POSITION_KI = 0.02
+POSITION_INTEGRAL_MAX_VELOCITY_M_S = 0.06
 EXTERNAL_FEEDFORWARD_TIMEOUT_S = 0.30
 EXTERNAL_MAX_FEEDFORWARD_M_S = 0.12
 # Swarm targets are refreshed continuously. A vehicle must stop trusting its
 # retained target if the coordinator disappears.
 EXTERNAL_TARGET_TIMEOUT_S = 2.0
+# Continuous mission interpolation refreshes targets at 10 Hz. Keep target
+# diagnostics useful without letting stdout logging starve control callbacks.
+EXTERNAL_TARGET_LOG_PERIOD_S = 1.0
 
 
 # ---------------------------------------------------------------------------
 # Telemetry and position sources
 # ---------------------------------------------------------------------------
 
-# Five onboard estimator samples per second leaves more shared-radio time for
-# three vehicles' external-position updates and command packets.
-TELEMETRY_PERIOD_MS = 200
+# Two compact health samples per second are enough for preflight validation
+# and takeoff saturation detection without competing with flight setpoints.
+TELEMETRY_PERIOD_MS = 500
+# Recovery traffic backs off exponentially when the shared radio is already
+# congested. A healthy sample immediately restores the initial retry delay.
+TELEMETRY_RESTART_TIMEOUT_S = 3.0
+TELEMETRY_RESTART_BACKOFF_MAX_S = 30.0
+WAND_TELEMETRY_PERIOD_MS = 100
 # This is a conservative test-readiness threshold, not the firmware's
 # critical-low cutoff. A hardware flight should begin with a charged pack so
 # that voltage sag under takeoff load does not reset the radio or controller.
@@ -74,13 +83,20 @@ VICON_FORWARD_RATE_HZ = 5.0
 # Reject receiver dropout sentinels and physically impossible pose jumps.
 VICON_ZERO_POSITION_EPSILON_M = 1e-4
 VICON_MAX_POSITION_JUMP_M = 0.35
+# An odd-width coordinate median removes isolated optical-tracking spikes
+# without averaging them into the flight path. At a 100 Hz Vicon rate this
+# adds roughly one frame (10 ms) of delay to sustained real motion.
+VICON_POSITION_MEDIAN_SAMPLES = 3
 VICON_REACQUIRE_TOLERANCE_M = 0.06
 VICON_REACQUIRE_SAMPLES = 5
 
 # One shared worker snapshots every connected vehicle's newest velocity and
 # transmits the full group once per 20 ms frame. Stock Crazyflie firmware
 # still requires one addressed CRTP packet per vehicle inside each frame.
-RADIO_COMMAND_RATE_HZ = 50.0
+# Three addressed vehicles plus Vicon and telemetry over one Crazyradio cannot
+# sustain 50 setpoints per vehicle reliably. The local controller still runs
+# at 50 Hz; the radio transmits its newest command on a stable 30 Hz schedule.
+RADIO_COMMAND_RATE_HZ = 30.0
 # Stop refreshing a command if its controller has not renewed it. Allow a few
 # timer periods for normal ROS scheduling jitter without sustaining a stale
 # flight command if a controller callback stops running.
@@ -97,6 +113,9 @@ FLIGHT_TEST_HOVER_S = 3.0
 FLIGHT_TEST_FIGURE_EIGHT_RADIUS_M = 0.35
 FLIGHT_TEST_FIGURE_EIGHT_DURATION_S = 20.0
 FLIGHT_TEST_POSITION_TOLERANCE_M = 0.08
+# Takeoff must get close enough to its commanded altitude that launch boost
+# has already tapered to zero before the controller enters hover.
+TAKEOFF_HEIGHT_TOLERANCE_M = 0.03
 ARM_SETTLE_TIME_S = 1.0
 # The ROS node must not enter READY until the firmware supervisor confirms
 # both armed and flyable. This bounds the blocking supervisor handshake.
@@ -109,14 +128,16 @@ ARM_CONFIRM_TIMEOUT_S = 1.0
 
 # These values are consumed by CrazyflieNode for both single and swarm runs.
 # Use a gentle takeoff profile for airframes carrying passive Vicon markers.
-TAKEOFF_BOOST_M_S = 0.50
-TAKEOFF_BOOST_END_HEIGHT_M = 0.3
+TAKEOFF_BOOST_M_S = 0.40
+TAKEOFF_BOOST_END_HEIGHT_M = 0.27
+TAKEOFF_BOOST_TAPER_START_HEIGHT_M = 0.15
 # Give marker-loaded airframes a short launch-assist window. During this time
 # the full configured boost may reach the onboard velocity controller and the
 # non-critical stalled-climb filters do not begin accumulating. Position
 # freshness, launch-column deviation, maximum flight time, and stop commands
 # remain active throughout the window.
 TAKEOFF_ASSIST_GRACE_S = 3.0
+TAKEOFF_ASSIST_RAMP_DOWN_S = 1.0
 TAKEOFF_GRACE_MAX_VERTICAL_VELOCITY_M_S = 0.50
 # During the grace window, allow the controller its normal horizontal
 # authority. The launch-column deviation guard remains active independently.
@@ -140,7 +161,7 @@ LANDING_HEIGHT_M = 0.05
 LANDING_COMPLETE_TOLERANCE_M = 0.03
 LANDING_SPEED_M_S = 0.10
 # Do not interpret a low-altitude safety landing as an immediate touchdown.
-LANDING_MIN_DURATION_S = 1.0
+LANDING_MIN_DURATION_S = 0.05
 # Safety timeout for takeoff, hover, figure eight, and landing.
 MAX_FLIGHT_TIME_S = 35.0
 TELEMETRY_LOSS_DESCENT_S = 3.0
@@ -158,7 +179,7 @@ ENABLE_EXTERNAL_TARGETS = False
 # The measured three-drone launch line is about 1.9 m wide. The remapped
 # triangle keeps nominal travel below 0.85 m; retain modest tracking headroom.
 EXTERNAL_MAX_HORIZONTAL_OFFSET_M = 0.95
-EXTERNAL_MIN_HEIGHT_M = 0.10
+EXTERNAL_MIN_HEIGHT_M = 0.05
 EXTERNAL_MAX_HEIGHT_M = 2
 
 
@@ -243,15 +264,28 @@ def validate_config():
         errors.append('each drone must have a unique radio URI')
     if (
         CONTROL_RATE_HZ < 50.0
-        or RADIO_COMMAND_RATE_HZ < 50.0
+        or RADIO_COMMAND_RATE_HZ < 25.0
         or VICON_FORWARD_RATE_HZ <= 0.0
     ):
         errors.append(
-            'control and radio command rates must be at least 50 Hz and '
-            'the Vicon rate must be positive'
+            'control rate must be at least 50 Hz, radio command rate must be '
+            'at least 25 Hz, and the Vicon rate must be positive'
         )
     if RADIO_COMMAND_TIMEOUT_S < 2.0 / CONTROL_RATE_HZ:
         errors.append('radio command timeout is too short for control jitter')
+    if TELEMETRY_RESTART_TIMEOUT_S <= 3.0 * TELEMETRY_PERIOD_MS / 1000.0:
+        errors.append(
+            'telemetry restart timeout is too short for radio jitter'
+        )
+    if TELEMETRY_RESTART_BACKOFF_MAX_S < TELEMETRY_RESTART_TIMEOUT_S:
+        errors.append('telemetry restart backoff maximum is too short')
+    if EXTERNAL_TARGET_LOG_PERIOD_S <= 0.0:
+        errors.append('external target log period must be positive')
+    if (
+        VICON_POSITION_MEDIAN_SAMPLES < 1
+        or VICON_POSITION_MEDIAN_SAMPLES % 2 == 0
+    ):
+        errors.append('Vicon median sample count must be positive and odd')
     if not (
         0.0 <= POSITION_KI
         and 0.0 <= POSITION_INTEGRAL_MAX_VELOCITY_M_S <= MAX_VELOCITY
@@ -275,6 +309,10 @@ def validate_config():
         errors.append('takeoff vertical speed limit must be positive')
     if not (
         0.0 <= TAKEOFF_ASSIST_GRACE_S
+        and TAKEOFF_ASSIST_RAMP_DOWN_S > 0.0
+        and 0.0 <= TAKEOFF_BOOST_TAPER_START_HEIGHT_M
+        < TAKEOFF_BOOST_END_HEIGHT_M
+        and 0.0 < TAKEOFF_HEIGHT_TOLERANCE_M
         and TAKEOFF_MAX_VERTICAL_VELOCITY_M_S
         <= TAKEOFF_GRACE_MAX_VERTICAL_VELOCITY_M_S
         <= 1.0

@@ -17,6 +17,13 @@ class CrazyflieInterfaceTest(unittest.TestCase):
         self.scf = Mock()
         self.interface = CrazyflieInterface(self.scf)
 
+    def test_shared_dispatcher_accepts_stable_three_drone_rate(self):
+        dispatcher = RadioCommandDispatcher(rate_hz=30.0)
+
+        self.assertEqual(dispatcher.rate_hz, 30.0)
+        with self.assertRaisesRegex(ValueError, 'at least 25 Hz'):
+            RadioCommandDispatcher(rate_hz=24.9)
+
     def test_arm_and_disarm_use_supervisor(self):
         self.scf.cf.supervisor.read_state_list.return_value = [
             'Can be armed',

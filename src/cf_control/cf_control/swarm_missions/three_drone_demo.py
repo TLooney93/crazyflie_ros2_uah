@@ -5,21 +5,22 @@ import math
 
 MISSION_NAME = 'three_drone_demo'
 
-FLIGHT_HEIGHT_M = 0.30
-TRIANGLE_RADIUS_M = 0.30
+FLIGHT_HEIGHT_M = 1
+TRIANGLE_RADIUS_M = 0.4
 LINE_SPACING_M = 0.40
 ROTATION_DEG = 90.0
 ROTATION_DURATION_S = 4.0
 ARRIVAL_TOLERANCE_M = 0.18
-STATIONARY_TIMEOUT_S = 8.0
+STATIONARY_TIMEOUT_S = 10.0
 
 
 MISSION = [
     {
         'name': 'INITIAL_HOVER',
+        'transition_s': 4.0,
         'hold_s': 3.0,
         'arrival_tolerance_m': ARRIVAL_TOLERANCE_M,
-        'timeout_s': 8.0,
+        'timeout_s': 15.0,
         'offsets': {
             'cf1': (0.0, 0.0, FLIGHT_HEIGHT_M),
             'cf2': (0.0, 0.0, FLIGHT_HEIGHT_M),
@@ -28,6 +29,7 @@ MISSION = [
     },
     {
         'name': 'TRIANGLE_ENTRY',
+        'transition_s': 3.0,
         'hold_s': 1.0,
         'arrival_tolerance_m': ARRIVAL_TOLERANCE_M,
         'timeout_s': STATIONARY_TIMEOUT_S,
@@ -68,6 +70,7 @@ MISSION = [
     },
     {
         'name': 'RETURN_TO_LINE',
+        'transition_s': 3.0,
         'hold_s': 1.0,
         'arrival_tolerance_m': ARRIVAL_TOLERANCE_M,
         'timeout_s': STATIONARY_TIMEOUT_S,

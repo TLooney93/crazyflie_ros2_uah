@@ -2,6 +2,7 @@
 
 from cf_control.config import (
     TAKEOFF_ASSIST_GRACE_S,
+    TAKEOFF_ASSIST_RAMP_DOWN_S,
     TAKEOFF_GRACE_MAX_VERTICAL_VELOCITY_M_S,
     TAKEOFF_MAX_VERTICAL_VELOCITY_M_S,
     TAKEOFF_PROGRESS_TIMEOUT_S,
@@ -137,3 +138,34 @@ def test_assist_grace_allows_full_boost_then_restores_normal_cap():
         TAKEOFF_GRACE_MAX_VERTICAL_VELOCITY_M_S,
         TAKEOFF_MAX_VERTICAL_VELOCITY_M_S,
     ) == TAKEOFF_MAX_VERTICAL_VELOCITY_M_S
+
+
+def test_assist_limit_ramps_down_without_boundary_step():
+    """Leaving launch assistance must not step the velocity command."""
+    before = takeoff_vertical_velocity_limit(
+        TAKEOFF_ASSIST_GRACE_S - 0.001,
+        TAKEOFF_ASSIST_GRACE_S,
+        TAKEOFF_GRACE_MAX_VERTICAL_VELOCITY_M_S,
+        TAKEOFF_MAX_VERTICAL_VELOCITY_M_S,
+        TAKEOFF_ASSIST_RAMP_DOWN_S,
+    )
+    boundary = takeoff_vertical_velocity_limit(
+        TAKEOFF_ASSIST_GRACE_S,
+        TAKEOFF_ASSIST_GRACE_S,
+        TAKEOFF_GRACE_MAX_VERTICAL_VELOCITY_M_S,
+        TAKEOFF_MAX_VERTICAL_VELOCITY_M_S,
+        TAKEOFF_ASSIST_RAMP_DOWN_S,
+    )
+    midpoint = takeoff_vertical_velocity_limit(
+        TAKEOFF_ASSIST_GRACE_S + TAKEOFF_ASSIST_RAMP_DOWN_S / 2.0,
+        TAKEOFF_ASSIST_GRACE_S,
+        TAKEOFF_GRACE_MAX_VERTICAL_VELOCITY_M_S,
+        TAKEOFF_MAX_VERTICAL_VELOCITY_M_S,
+        TAKEOFF_ASSIST_RAMP_DOWN_S,
+    )
+
+    assert before == boundary
+    assert midpoint == (
+        TAKEOFF_GRACE_MAX_VERTICAL_VELOCITY_M_S
+        + TAKEOFF_MAX_VERTICAL_VELOCITY_M_S
+    ) / 2.0

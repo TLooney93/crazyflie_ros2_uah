@@ -848,12 +848,13 @@ The receiver may publish roughly 100 Vicon poses per second per rigid body.
 The controller uses Vicon directly as the authoritative ROS control and swarm
 safety position, while retaining onboard `stateEstimate` telemetry for the
 preflight agreement check. By default, only 5 Hz is forwarded to each onboard
-estimator, and onboard telemetry is requested at 5 Hz. This preserves
-shared-Crazyradio bandwidth for commands and return telemetry. Expect periodic
-messages similar to:
+estimator. Onboard flight telemetry is one 10-byte block requested at 2 Hz;
+it contains only estimator XYZ, battery, and thrust. This preserves
+shared-Crazyradio bandwidth for commands and external-position packets. Expect
+periodic messages similar to:
 
 ```text
-Vicon rates: input 100.0 Hz, forwarded 4.5-5.0 Hz; estimator telemetry 5.0 Hz, age 0.10 s; cflib handoff velocity 50.0 Hz, extpos 5.0 Hz
+Vicon rates: input 100.0 Hz, forwarded 4.5-5.0 Hz; estimator telemetry 2.0 Hz, age 0.20 s; cflib handoff velocity 30.0 Hz, extpos 5.0 Hz
 ```
 
 Wait for every Vicon-ready message. Verify each position stream separately:

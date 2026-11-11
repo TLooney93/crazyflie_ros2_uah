@@ -3,9 +3,12 @@ import unittest
 from cf_control.config import (
     CONTROL_RATE_HZ,
     TAKEOFF_ASSIST_GRACE_S,
+    TAKEOFF_ASSIST_RAMP_DOWN_S,
     TAKEOFF_BOOST_END_HEIGHT_M,
     TAKEOFF_BOOST_M_S,
+    TAKEOFF_BOOST_TAPER_START_HEIGHT_M,
     TAKEOFF_GRACE_MAX_HORIZONTAL_VELOCITY_M_S,
+    TAKEOFF_HEIGHT_TOLERANCE_M,
     TAKEOFF_MAX_HORIZONTAL_VELOCITY_M_S,
     TAKEOFF_MAX_VERTICAL_VELOCITY_M_S,
     TAKEOFF_NEAR_FLOOR_HEIGHT_M,
@@ -35,7 +38,7 @@ class FlightControllerTest(unittest.TestCase):
         )
 
     def test_ground_effect_boost_only_applies_below_cutoff(self):
-        self.assertEqual(
+        self.assertAlmostEqual(
             ground_effect_takeoff_boost(
                 0.05,
                 TAKEOFF_BOOST_END_HEIGHT_M,
@@ -48,6 +51,35 @@ class FlightControllerTest(unittest.TestCase):
                 TAKEOFF_BOOST_END_HEIGHT_M,
                 TAKEOFF_BOOST_END_HEIGHT_M,
                 TAKEOFF_BOOST_M_S,
+            ),
+            0.0,
+        )
+
+    def test_ground_effect_boost_tapers_instead_of_stepping(self):
+        midpoint = (
+            TAKEOFF_BOOST_TAPER_START_HEIGHT_M
+            + TAKEOFF_BOOST_END_HEIGHT_M
+        ) / 2.0
+
+        self.assertAlmostEqual(
+            ground_effect_takeoff_boost(
+                midpoint,
+                TAKEOFF_BOOST_END_HEIGHT_M,
+                TAKEOFF_BOOST_M_S,
+                TAKEOFF_BOOST_TAPER_START_HEIGHT_M,
+            ),
+            TAKEOFF_BOOST_M_S / 2.0,
+        )
+
+    def test_boost_is_zero_before_standard_hover_transition(self):
+        earliest_hover_height = 0.30 - TAKEOFF_HEIGHT_TOLERANCE_M
+
+        self.assertAlmostEqual(
+            ground_effect_takeoff_boost(
+                earliest_hover_height,
+                TAKEOFF_BOOST_END_HEIGHT_M,
+                TAKEOFF_BOOST_M_S,
+                TAKEOFF_BOOST_TAPER_START_HEIGHT_M,
             ),
             0.0,
         )
@@ -115,6 +147,40 @@ class FlightControllerTest(unittest.TestCase):
         self.assertEqual(
             limit,
             TAKEOFF_GRACE_MAX_HORIZONTAL_VELOCITY_M_S,
+        )
+
+    def test_horizontal_grace_limit_ramps_down_without_step(self):
+        boundary = takeoff_horizontal_velocity_limit(
+            TAKEOFF_ASSIST_GRACE_S,
+            TAKEOFF_ASSIST_GRACE_S,
+            TAKEOFF_GRACE_MAX_HORIZONTAL_VELOCITY_M_S,
+            TAKEOFF_NEAR_FLOOR_HEIGHT_M,
+            TAKEOFF_NEAR_FLOOR_HEIGHT_M,
+            TAKEOFF_NEAR_FLOOR_MAX_HORIZONTAL_VELOCITY_M_S,
+            TAKEOFF_MAX_HORIZONTAL_VELOCITY_M_S,
+            TAKEOFF_ASSIST_RAMP_DOWN_S,
+        )
+        midpoint = takeoff_horizontal_velocity_limit(
+            TAKEOFF_ASSIST_GRACE_S + TAKEOFF_ASSIST_RAMP_DOWN_S / 2.0,
+            TAKEOFF_ASSIST_GRACE_S,
+            TAKEOFF_GRACE_MAX_HORIZONTAL_VELOCITY_M_S,
+            TAKEOFF_NEAR_FLOOR_HEIGHT_M,
+            TAKEOFF_NEAR_FLOOR_HEIGHT_M,
+            TAKEOFF_NEAR_FLOOR_MAX_HORIZONTAL_VELOCITY_M_S,
+            TAKEOFF_MAX_HORIZONTAL_VELOCITY_M_S,
+            TAKEOFF_ASSIST_RAMP_DOWN_S,
+        )
+
+        self.assertEqual(
+            boundary,
+            TAKEOFF_GRACE_MAX_HORIZONTAL_VELOCITY_M_S,
+        )
+        self.assertAlmostEqual(
+            midpoint,
+            (
+                TAKEOFF_GRACE_MAX_HORIZONTAL_VELOCITY_M_S
+                + TAKEOFF_MAX_HORIZONTAL_VELOCITY_M_S
+            ) / 2.0,
         )
 
     def test_position_error_produces_proportional_velocity(self):

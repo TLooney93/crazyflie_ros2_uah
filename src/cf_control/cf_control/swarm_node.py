@@ -178,6 +178,8 @@ class SwarmNode(Node):
         self.phase_arrived_at = None
         self.phase_arrived_drones = set()
         self.phase_started_at = None
+        self.phase_entry_targets = None
+        self.phase_command_targets = None
         self.wand_flight_detected_at = None
         self.last_status_published_at = 0.0
         self.last_diagnostic_logged_at = 0.0
@@ -763,6 +765,7 @@ class SwarmNode(Node):
         self.phase_arrived_at = None
         self.phase_arrived_drones = set()
         self.phase_started_at = time.monotonic()
+        self.phase_entry_targets = dict(self.positions)
         self._set_state('MISSION')
         self.get_logger().info(
             f'Swarm mission phase: {self.mission[self.phase_index]["name"]}'
@@ -774,6 +777,14 @@ class SwarmNode(Node):
         self.phase_arrived_at = None
         self.phase_arrived_drones = set()
         self.phase_started_at = now
+        self.phase_entry_targets = {
+            drone_id: (
+                self.home_positions[drone_id][0],
+                self.home_positions[drone_id][1],
+                self.home_positions[drone_id][2] + self.takeoff_height_m,
+            )
+            for drone_id in self.drone_ids
+        }
         self._set_state('MISSION')
         self.get_logger().info(
             f'Swarm mission phase: {self.mission[0]["name"]}'
@@ -798,6 +809,12 @@ class SwarmNode(Node):
                 drone_id: (0.0, 0.0, 0.0)
                 for drone_id in targets
             }
+            targets = self._smooth_phase_targets(
+                phase,
+                targets,
+                elapsed_s,
+            )
+        self.phase_command_targets = dict(targets)
         self._publish_motion_commands(targets, feedforwards)
 
         timeout_s = phase.get('timeout_s')
@@ -853,6 +870,11 @@ class SwarmNode(Node):
 
     def _advance_mission_phase(self, now):
         """Advance to the next phase or request the automatic landing."""
+        self.phase_entry_targets = (
+            dict(self.phase_command_targets)
+            if self.phase_command_targets is not None
+            else dict(self.positions)
+        )
         self.phase_index += 1
         self.phase_arrived_at = None
         self.phase_arrived_drones = set()
@@ -873,6 +895,22 @@ class SwarmNode(Node):
         self.get_logger().info(
             f'Swarm mission phase: {self.mission[self.phase_index]["name"]}'
         )
+
+    def _smooth_phase_targets(self, phase, targets, elapsed_s):
+        """Blend stationary phase targets with zero endpoint velocity."""
+        transition_s = phase.get('transition_s', 0.0)
+        entry_targets = getattr(self, 'phase_entry_targets', None)
+        if transition_s <= 0.0 or not entry_targets:
+            return targets
+        progress = max(0.0, min(elapsed_s / transition_s, 1.0))
+        blend = progress * progress * (3.0 - 2.0 * progress)
+        return {
+            drone_id: tuple(
+                start + blend * (end - start)
+                for start, end in zip(entry_targets[drone_id], target)
+            )
+            for drone_id, target in targets.items()
+        }
 
     def _publish_motion_commands(self, targets, feedforwards):
         """Publish synchronized position and velocity-feedforward commands."""
@@ -944,8 +982,17 @@ class SwarmNode(Node):
         duration_s = trajectory['duration_s']
         progress = max(0.0, min(elapsed_s / duration_s, 1.0))
         rotation_angle = math.radians(trajectory.get('angle_deg', 360.0))
-        angle = rotation_angle * progress
-        angular_rate = rotation_angle / duration_s
+        # Smooth time scaling makes both angular velocity and the resulting
+        # feedforward continuous at trajectory entry and exit.
+        smooth_progress = progress * progress * (3.0 - 2.0 * progress)
+        angle = rotation_angle * smooth_progress
+        angular_rate = (
+            rotation_angle
+            * 6.0
+            * progress
+            * (1.0 - progress)
+            / duration_s
+        )
         radius_m = trajectory['radius_m']
         height_m = trajectory['height_m']
         phase_step = 2.0 * math.pi / len(self.drone_ids)

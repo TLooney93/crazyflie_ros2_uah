@@ -103,6 +103,18 @@ def load_swarm_mission(name, drone_ids):
         if hold_s < 0.0:
             raise ValueError(f'Phase {phase_name!r} hold_s cannot be negative')
 
+        transition_s = phase.get('transition_s', 0.0)
+        if (
+            not isinstance(transition_s, (int, float))
+            or not math.isfinite(transition_s)
+            or transition_s < 0.0
+        ):
+            raise ValueError(
+                f'Phase {phase_name!r} transition_s must be a '
+                'non-negative finite number'
+            )
+        phase['transition_s'] = float(transition_s)
+
         timeout_s = phase.get('timeout_s')
         if timeout_s is not None:
             if (

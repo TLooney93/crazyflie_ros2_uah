@@ -3,14 +3,15 @@
 from cf_control.config import (
     CACHE_DIR,
     DRONES,
-    TELEMETRY_PERIOD_MS,
+    TELEMETRY_RESTART_TIMEOUT_S,
+    WAND_TELEMETRY_PERIOD_MS,
     WAND_CONNECTED_TOPIC,
     WAND_ENABLED_TOPIC,
     WAND_FRAME_ID,
     WAND_GESTURE_TOPIC,
     WAND_POSE_TOPIC,
 )
-from cf_control.telemetry import TelemetryReader
+from cf_control.telemetry import TelemetryReader, WAND_TELEMETRY_VARIABLES
 from cf_control.wand_control import ButtonEdges, euler_degrees_to_quaternion
 from cflib.crazyflie import Crazyflie
 from cflib.crazyflie.log import LogConfig
@@ -135,8 +136,9 @@ class WandDriverNode(Node):
         self.telemetry = TelemetryReader(
             self.scf,
             callback=self._on_telemetry,
-            period_ms=TELEMETRY_PERIOD_MS,
-            include_attitude=True,
+            period_ms=WAND_TELEMETRY_PERIOD_MS,
+            restart_timeout_s=TELEMETRY_RESTART_TIMEOUT_S,
+            variables=WAND_TELEMETRY_VARIABLES,
         )
         self.telemetry.start()
         if self.buttons_enabled:

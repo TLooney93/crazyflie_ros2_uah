@@ -506,13 +506,15 @@ ros2 topic hz /cf1/position
 ```
 
 If raw Vicon remains near 100 Hz while `/cf1/position` or `/cf2/position`
-stops, the failure is on the shared radio/telemetry path rather than the Vicon
-camera stream. In Vicon mode, the camera measurement is the authoritative ROS
-control and safety position; `stateEstimate` is retained as a preflight
-agreement check. Hardware control limits external-position forwarding to 5 Hz
-per drone by default and requests onboard telemetry at 5 Hz. It logs both
-rates every five seconds. Do not increase the stale-position timeout to hide
-this condition.
+stops, the ROS Vicon callback path has stalled. In Vicon mode, the camera
+measurement is the authoritative ROS control and safety position; onboard
+`stateEstimate` is retained only for the preflight agreement check. Hardware
+control limits external-position forwarding to 5 Hz per drone and requests
+one compact onboard health block at 2 Hz. The block contains only estimator
+XYZ, battery, and thrust. Telemetry silence is reported and recovered with
+exponential backoff, but it does not replace or invalidate a healthy Vicon
+position stream. Do not increase the stale-position timeout to hide a stopped
+Vicon callback path.
 
 ### Shell command is missing
 
