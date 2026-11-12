@@ -4,12 +4,12 @@ from cf_control.config import (
     CACHE_DIR,
     DRONES,
     TELEMETRY_RESTART_TIMEOUT_S,
-    WAND_TELEMETRY_PERIOD_MS,
     WAND_CONNECTED_TOPIC,
     WAND_ENABLED_TOPIC,
     WAND_FRAME_ID,
     WAND_GESTURE_TOPIC,
     WAND_POSE_TOPIC,
+    WAND_TELEMETRY_PERIOD_MS,
 )
 from cf_control.telemetry import TelemetryReader, WAND_TELEMETRY_VARIABLES
 from cf_control.wand_control import ButtonEdges, euler_degrees_to_quaternion

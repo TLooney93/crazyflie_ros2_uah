@@ -10,9 +10,9 @@ from cf_control.config import (
     TAKEOFF_THRUST_SATURATION_THRESHOLD,
 )
 from cf_control.takeoff import (
+    takeoff_vertical_velocity_limit,
     TakeoffSafetyLimits,
     TakeoffSafetyMonitor,
-    takeoff_vertical_velocity_limit,
 )
 
 

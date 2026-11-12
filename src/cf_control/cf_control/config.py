@@ -1,4 +1,5 @@
-"""Project-wide runtime defaults.
+"""
+Project-wide runtime defaults.
 
 Mission geometry belongs in ``crazyflie_missions/`` or ``swarm_missions/``;
 swarm membership belongs in ``swarm_profiles/``.  This file contains only
@@ -21,7 +22,7 @@ DRONES = {
     'cf2': 'radio://0/80/2M/E7E7E7E710',
     'cf3': 'radio://0/80/2M/E7E7E7E702',
     # 'cfw': 'radio://0/80/2M/E7E7E7E7E1',
-    #'cf7': 'radio://0/80/2M/E7E7E7E707',
+    # 'cf7': 'radio://0/80/2M/E7E7E7E707',
 }
 
 CACHE_DIR = Path.home() / 'dev' / 'crazyflie' / 'cache'
@@ -78,25 +79,23 @@ POSITION_TIMEOUT_S = 2.0
 # Crazyflie firmware estimator selection: 2 selects the Kalman estimator.
 KALMAN_ESTIMATOR = 2
 VICON_ESTIMATOR_MAX_ERROR_M = 0.15
-# Limit radio traffic while retaining the full-rate ROS Vicon stream.
-VICON_FORWARD_RATE_HZ = 5.0
-# Reject receiver dropout sentinels and physically impossible pose jumps.
+# Feed the onboard estimator often enough to track velocity between camera
+# frames without forwarding the full optical stream. Three drones at 20 Hz
+# consume 60 addressed packets/s, leaving room for 150 command packets/s and
+# low-rate health telemetry on a shared 2 Mbit Crazyradio.
+VICON_FORWARD_RATE_HZ = 20.0
+# Reject receiver dropout sentinels. Position changes are filtered by how long
+# they persist, not by their distance, so behavior is independent of motion
+# scale and Vicon callback frequency.
 VICON_ZERO_POSITION_EPSILON_M = 1e-4
-VICON_MAX_POSITION_JUMP_M = 0.35
-# An odd-width coordinate median removes isolated optical-tracking spikes
-# without averaging them into the flight path. At a 100 Hz Vicon rate this
-# adds roughly one frame (10 ms) of delay to sustained real motion.
-VICON_POSITION_MEDIAN_SAMPLES = 3
-VICON_REACQUIRE_TOLERANCE_M = 0.06
-VICON_REACQUIRE_SAMPLES = 5
+VICON_POSITION_FILTER_WINDOW_S = 0.10
 
 # One shared worker snapshots every connected vehicle's newest velocity and
 # transmits the full group once per 20 ms frame. Stock Crazyflie firmware
 # still requires one addressed CRTP packet per vehicle inside each frame.
-# Three addressed vehicles plus Vicon and telemetry over one Crazyradio cannot
-# sustain 50 setpoints per vehicle reliably. The local controller still runs
-# at 50 Hz; the radio transmits its newest command on a stable 30 Hz schedule.
-RADIO_COMMAND_RATE_HZ = 30.0
+# Recorded three-drone flights sustained this rate when the link was healthy;
+# lowering it to 30 Hz only made the onboard velocity target less responsive.
+RADIO_COMMAND_RATE_HZ = 50.0
 # Stop refreshing a command if its controller has not renewed it. Allow a few
 # timer periods for normal ROS scheduling jitter without sustaining a stale
 # flight command if a controller callback stops running.
@@ -203,7 +202,7 @@ SWARM_SEPARATION_VIOLATION_S = 1.50
 # altitude for more than this short confirmation interval.
 SWARM_ALTITUDE_LOSS_MARGIN_M = 0.4
 SWARM_ALTITUDE_VIOLATION_S = 1.50
-SWARM_MIN_AIRBORNE_HEIGHT_M = 0.05
+SWARM_MIN_AIRBORNE_HEIGHT_M = 0.0
 # Rising motion from a staged member that should still be grounded indicates
 # an identity mismatch or another uncommanded vehicle.
 SWARM_UNCOMMANDED_MOTION_M = 0.08
@@ -264,12 +263,12 @@ def validate_config():
         errors.append('each drone must have a unique radio URI')
     if (
         CONTROL_RATE_HZ < 50.0
-        or RADIO_COMMAND_RATE_HZ < 25.0
-        or VICON_FORWARD_RATE_HZ <= 0.0
+        or RADIO_COMMAND_RATE_HZ < 50.0
+        or VICON_FORWARD_RATE_HZ < 10.0
     ):
         errors.append(
-            'control rate must be at least 50 Hz, radio command rate must be '
-            'at least 25 Hz, and the Vicon rate must be positive'
+            'control and radio command rates must be at least 50 Hz and '
+            'the Vicon forwarding rate must be at least 10 Hz'
         )
     if RADIO_COMMAND_TIMEOUT_S < 2.0 / CONTROL_RATE_HZ:
         errors.append('radio command timeout is too short for control jitter')
@@ -281,11 +280,8 @@ def validate_config():
         errors.append('telemetry restart backoff maximum is too short')
     if EXTERNAL_TARGET_LOG_PERIOD_S <= 0.0:
         errors.append('external target log period must be positive')
-    if (
-        VICON_POSITION_MEDIAN_SAMPLES < 1
-        or VICON_POSITION_MEDIAN_SAMPLES % 2 == 0
-    ):
-        errors.append('Vicon median sample count must be positive and odd')
+    if VICON_POSITION_FILTER_WINDOW_S <= 0.0:
+        errors.append('Vicon position filter window must be positive')
     if not (
         0.0 <= POSITION_KI
         and 0.0 <= POSITION_INTEGRAL_MAX_VELOCITY_M_S <= MAX_VELOCITY

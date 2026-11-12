@@ -1,7 +1,6 @@
-import pytest
-
 from cf_control.config import DRONES
 from cf_control.identify_radio import _resolve_uri, blink_identity
+import pytest
 
 
 def test_resolve_uri_accepts_configured_name_and_explicit_uri():

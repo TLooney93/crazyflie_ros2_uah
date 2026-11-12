@@ -1,8 +1,5 @@
 """Vertical takeoff, stationary hover, and landing test mission."""
 
-from cf_control.config import FLIGHT_TEST_HEIGHT_M
-
-
 MISSION_NAME = 'hover_test'
 
 MISSION = [

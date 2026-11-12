@@ -275,8 +275,9 @@ def test_staged_phase_arrival_ignores_grounded_members():
         'cf2': (1.0, 0.0, 0.0),
         'cf3': (2.0, 0.0, 0.0),
     }
+    initial_height = node.mission[0]['offsets']['cf1'][2]
     node.positions = {
-        'cf1': (0.0, 0.0, 1.0),
+        'cf1': (0.0, 0.0, initial_height),
         'cf2': (1.0, 0.0, 0.0),
         'cf3': (2.0, 0.0, 0.0),
     }

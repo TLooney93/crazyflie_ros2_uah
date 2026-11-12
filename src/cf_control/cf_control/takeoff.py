@@ -1,4 +1,5 @@
-"""Takeoff command shaping and safety monitoring.
+"""
+Takeoff command shaping and safety monitoring.
 
 Both single-drone and swarm hardware flights use :class:`CrazyflieNode`, so
 this module is the single source of truth for their takeoff behavior.  The
@@ -7,8 +8,8 @@ a vehicle that leaves its launch column or demands high thrust without
 climbing.
 """
 
-import math
 from dataclasses import dataclass
+import math
 
 
 def ground_effect_takeoff_boost(

@@ -1,10 +1,10 @@
 """Bounded, latest-value Crazyflie telemetry transport."""
 
+from dataclasses import dataclass
 import logging
+from queue import Empty, Full, Queue
 import threading
 import time
-from dataclasses import dataclass
-from queue import Empty, Full, Queue
 
 from cflib.crazyflie.log import LogConfig
 

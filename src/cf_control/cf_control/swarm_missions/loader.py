@@ -8,8 +8,8 @@ continuous formation path. To register a mission, import its ``MISSION_NAME``
 and ``MISSION`` below and add that pair to ``SWARM_MISSIONS``.
 """
 
-import math
 from copy import deepcopy
+import math
 
 from cf_control.config import (
     EXTERNAL_MAX_HEIGHT_M,

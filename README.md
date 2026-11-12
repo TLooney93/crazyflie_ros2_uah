@@ -39,14 +39,10 @@ Launch does not arm automatically. In another terminal, use
 
 - [ARCHITECTURE.md](ARCHITECTURE.md) — process ownership, data flow, safety,
   and where each kind of change belongs.
-- [LAUNCH_TEST_REFERENCE.md](LAUNCH_TEST_REFERENCE.md) — command and alias
-  reference for simulation and hardware.
-- [FLIGHT_TEST_REFERENCE.md](FLIGHT_TEST_REFERENCE.md) — physical-flight
-  checklist and Vicon verification.
-- [MISSION_AND_PROFILE_AUTHORING_REFERENCE.md](MISSION_AND_PROFILE_AUTHORING_REFERENCE.md)
-  — templates and validation rules for missions and profiles.
-- [PROJECT_FILE_AND_MISSION_GUIDE.md](PROJECT_FILE_AND_MISSION_GUIDE.md) —
-  detailed source-tree map.
+- [OPERATIONS.md](OPERATIONS.md) — simulation, hardware, flight logging, rate
+  diagnostics, and failure handling.
+- [MISSION_AUTHORING.md](MISSION_AUTHORING.md) — concise mission/profile
+  templates and validation steps.
 
 ## Configuration ownership
 

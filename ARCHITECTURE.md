@@ -1,8 +1,7 @@
 # Crazyflie control architecture
 
-This document is the authoritative runtime overview. Command syntax belongs
-in `LAUNCH_TEST_REFERENCE.md`; mission schemas belong in
-`MISSION_AND_PROFILE_AUTHORING_REFERENCE.md`.
+This document is the authoritative runtime overview. Operator commands belong
+in `OPERATIONS.md`; mission schemas belong in `MISSION_AUTHORING.md`.
 
 ## Runtime layers
 
@@ -59,22 +58,26 @@ Gazebo odometry as authoritative position; Vicon is not required.
 
 ```text
 /vicon/<subject>/<segment> (PoseStamped)
-   -> pose validation and jump/reacquisition filtering
+   -> latest-value pose validation and time-domain filtering
    -> /<drone_id>/position (Point)
    -> FlightController (bounded PI position control)
    -> takeoff/landing command shaping
    -> Crazyflie world-frame velocity setpoint
 ```
 
-Accepted Vicon poses are rate-limited before being forwarded to the firmware
-Kalman estimator. ROS keeps the full receiver stream for control and safety;
-radio forwarding defaults to 5 Hz to preserve shared-radio bandwidth. Onboard
-estimator telemetry remains a separate preflight health check.
+The Vicon subscription is best-effort with a one-message queue: control always
+uses the newest pose instead of draining stale camera frames after a host
+scheduling pause. Accepted poses are rate-limited before being forwarded to
+the firmware Kalman estimator. Forwarding defaults to 20 Hz per drone, while
+onboard estimator health telemetry remains a separate 2 Hz preflight stream.
 
 Velocity commands use latest-value semantics: every controller renews its
 command at 50 Hz and the dispatcher repeats only the newest value during its
 shared frame. A value expires after 100 ms without renewal, preventing a dead
 controller callback from sustaining an old movement command indefinitely.
+The five-second rate report includes the observed maximum command gap, skipped
+dispatch frames, stale commands, send errors, and cflib's measured radio uplink
+rate, payload utilization, and retry-derived link quality.
 
 ## Flight ownership
 
@@ -91,7 +94,7 @@ Because swarm controllers are instances of the same node, these policies apply
 to both single and swarm hardware.
 
 Marker-loaded airframes receive a three-second launch-assist window. It allows
-the full configured `0.50 m/s` vertical command and delays only the
+the configured launch boost and delays only the
 stalled-climb and thrust-saturation timers. Vicon freshness, the hard launch
 column, emergency stop, and overall flight timeout remain active.
 

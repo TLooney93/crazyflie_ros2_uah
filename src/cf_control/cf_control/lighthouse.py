@@ -1,9 +1,10 @@
-import time
-import math
 from collections import deque
-from queue import Queue, Empty
+import math
+from queue import Empty, Queue
+import time
 
 from cflib.crazyflie.log import LogConfig
+
 
 class LighthouseManager:
 
@@ -11,9 +12,7 @@ class LighthouseManager:
         self.scf = scf
 
     def verify(self, timeout_s=10.0):
-        """
-        Verify Lighthouse positioning appears usable.
-        """
+        """Verify Lighthouse positioning appears usable."""
         if not math.isfinite(timeout_s) or timeout_s <= 0:
             raise ValueError(
                 'timeout_s must be finite and greater than zero'
@@ -118,9 +117,7 @@ class LighthouseManager:
                 log_config.delete()
 
     def reset_estimator(self):
-        """
-        Request an estimator reset while the drone is grounded.
-        """
+        """Request an estimator reset while the drone is grounded."""
         self.scf.cf.param.set_value('kalman.resetEstimation', '1')
 
         try:

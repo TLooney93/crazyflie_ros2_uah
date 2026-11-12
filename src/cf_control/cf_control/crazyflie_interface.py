@@ -10,7 +10,8 @@ from cf_control.config import (
 
 
 class RadioCommandDispatcher:
-    """Transmit one deterministic, latest-value frame for a shared radio.
+    """
+    Transmit one deterministic, latest-value frame for a shared radio.
 
     A stock Crazyradio must address each Crazyflie separately. A dispatch
     frame therefore consists of one velocity packet for every owner with a
@@ -24,8 +25,8 @@ class RadioCommandDispatcher:
         rate_hz=RADIO_COMMAND_RATE_HZ,
         command_timeout_s=RADIO_COMMAND_TIMEOUT_S,
     ):
-        if not math.isfinite(rate_hz) or rate_hz < 25.0:
-            raise ValueError('shared radio command rate must be at least 25 Hz')
+        if not math.isfinite(rate_hz) or rate_hz < 50.0:
+            raise ValueError('shared radio command rate must be at least 50 Hz')
         if (
             not math.isfinite(command_timeout_s)
             or command_timeout_s <= 0.0
@@ -121,6 +122,7 @@ class RadioCommandDispatcher:
 
                 velocities = []
                 external_positions = []
+                stale_owners = []
                 for owner, slots in self._pending.items():
                     velocity = slots['velocity']
                     if velocity is not None:
@@ -129,6 +131,7 @@ class RadioCommandDispatcher:
                             velocities.append((owner, command))
                         else:
                             slots['velocity'] = None
+                            stale_owners.append(owner)
                     if slots['external_position'] is not None:
                         _, command = slots['external_position']
                         external_positions.append(
@@ -136,6 +139,8 @@ class RadioCommandDispatcher:
                         )
                         slots['external_position'] = None
 
+            for owner in stale_owners:
+                owner._record_stale_velocity()
             for owner, command in velocities:
                 self._dispatch(owner, owner._send_velocity_if_current, command)
             for owner, command in external_positions:
@@ -155,6 +160,13 @@ class RadioCommandDispatcher:
                     (finished_at - next_frame_at) / self._period_s
                 ) + 1,
             )
+            if frames_elapsed > 1:
+                delay_s = finished_at - next_frame_at
+                for owner, _command in velocities:
+                    owner._record_dispatch_overrun(
+                        frames_elapsed - 1,
+                        delay_s,
+                    )
             next_frame_at += frames_elapsed * self._period_s
 
     @staticmethod
@@ -179,7 +191,17 @@ class CrazyflieInterface:
         self._command_generation = 0
         self._sent_velocity = 0
         self._sent_external_position = 0
+        self._stale_velocity_drops = 0
+        self._dispatch_frames_skipped = 0
+        self._max_dispatch_delay_s = 0.0
+        self._last_velocity_sent_at = None
+        self._max_velocity_gap_s = 0.0
         self._last_send_error = None
+        self._radio_uplink_rate_hz = None
+        self._radio_uplink_payload_fraction = None
+        self._radio_link_quality = None
+        self._radio_statistics_received_at = None
+        self._link_statistics_callbacks = []
 
     def start(self):
         """Register this link with its shared priority dispatcher."""
@@ -187,6 +209,7 @@ class CrazyflieInterface:
             if self._started:
                 return
             self._started = True
+        self._register_link_statistics_callbacks()
         self._dispatcher.register(self)
         self._dispatcher.start()
 
@@ -195,23 +218,69 @@ class CrazyflieInterface:
         with self._state_lock:
             self._started = False
             self._command_generation += 1
+            self._last_velocity_sent_at = None
         self._dispatcher.unregister(self)
+        self._remove_link_statistics_callbacks()
         if self._owns_dispatcher:
             self._dispatcher.shutdown()
+
+    def _register_link_statistics_callbacks(self):
+        """Subscribe to cflib's measured, over-the-air link statistics."""
+        statistics = getattr(self.scf.cf, 'link_statistics', None)
+        if statistics is None or self._link_statistics_callbacks:
+            return
+        subscriptions = (
+            ('uplink_rate_updated', self._update_radio_uplink_rate),
+            (
+                'uplink_congestion_updated',
+                self._update_radio_uplink_payload_fraction,
+            ),
+            ('link_quality_updated', self._update_radio_link_quality),
+        )
+        for caller_name, callback in subscriptions:
+            caller = getattr(statistics, caller_name, None)
+            if caller is None or not hasattr(caller, 'add_callback'):
+                continue
+            caller.add_callback(callback)
+            self._link_statistics_callbacks.append((caller, callback))
+
+    def _remove_link_statistics_callbacks(self):
+        """Detach callbacks before the interface and its ROS node disappear."""
+        callbacks = self._link_statistics_callbacks
+        self._link_statistics_callbacks = []
+        for caller, callback in callbacks:
+            try:
+                caller.remove_callback(callback)
+            except ValueError:
+                pass
+
+    def _update_radio_uplink_rate(self, rate_hz):
+        """Store cflib's latest measured packet rate for this radio link."""
+        with self._state_lock:
+            self._radio_uplink_rate_hz = float(rate_hz)
+            self._radio_statistics_received_at = time.monotonic()
+
+    def _update_radio_uplink_payload_fraction(self, fraction):
+        """Store the fraction of uplink packets carrying non-null payloads."""
+        with self._state_lock:
+            self._radio_uplink_payload_fraction = float(fraction)
+            self._radio_statistics_received_at = time.monotonic()
+
+    def _update_radio_link_quality(self, quality):
+        """Store cflib's retry-derived link quality percentage."""
+        with self._state_lock:
+            self._radio_link_quality = float(quality)
+            self._radio_statistics_received_at = time.monotonic()
 
     def _clear_pending(self):
         """Prevent an old setpoint from being sent after a safety command."""
         with self._state_lock:
             self._command_generation += 1
+            self._last_velocity_sent_at = None
         self._dispatcher.discard(self)
 
     def set_parameter(self, name, value):
-        """Request a firmware parameter update on the connected drone.
-
-        Args:
-            name: Full firmware parameter name in 'group.parameter' form.
-            value: Numeric value or numeric string to assign.
-        """
+        """Set firmware parameter ``name`` to the numeric ``value``."""
         self.scf.cf.param.set_value(name, str(value))
 
     def arm(self, timeout_s=ARM_CONFIRM_TIMEOUT_S):
@@ -257,17 +326,7 @@ class CrazyflieInterface:
             self.scf.cf.supervisor.send_arming_request(False)
 
     def send_velocity(self, vx, vy, vz, yaw_rate=0.0):
-        """Send one velocity setpoint in the world coordinate frame.
-
-        Args:
-            vx: Requested velocity along the world x-axis, in meters per second.
-            vy: Requested velocity along the world y-axis, in meters per second.
-            vz: Requested velocity along the world z-axis, in meters per second.
-            yaw_rate: Requested turning rate, in degrees per second. Defaults to
-                zero.
-
-        The caller is responsible for limiting and repeatedly sending setpoints.
-        """
+        """Queue a bounded world-frame velocity setpoint for transmission."""
         with self._state_lock:
             started = self._started
             command = (
@@ -304,6 +363,13 @@ class CrazyflieInterface:
                 yaw_rate,
             )
             with self._state_lock:
+                sent_at = time.monotonic()
+                if self._last_velocity_sent_at is not None:
+                    self._max_velocity_gap_s = max(
+                        self._max_velocity_gap_s,
+                        sent_at - self._last_velocity_sent_at,
+                    )
+                self._last_velocity_sent_at = sent_at
                 self._sent_velocity += 1
 
     def send_external_position(self, x, y, z):
@@ -335,16 +401,50 @@ class CrazyflieInterface:
         with self._state_lock:
             self._last_send_error = str(error)
 
-    def consume_send_statistics(self):
-        """Return and reset successful handoff counts and the last error."""
+    def _record_stale_velocity(self):
+        """Count a command that expired before its next radio frame."""
         with self._state_lock:
+            self._stale_velocity_drops += 1
+            self._last_velocity_sent_at = None
+
+    def _record_dispatch_overrun(self, skipped_frames, delay_s):
+        """Retain missed-frame evidence without logging in the worker."""
+        with self._state_lock:
+            self._dispatch_frames_skipped += skipped_frames
+            self._max_dispatch_delay_s = max(
+                self._max_dispatch_delay_s,
+                delay_s,
+            )
+
+    def consume_send_statistics(self):
+        """Return handoff counters plus cflib's measured radio statistics."""
+        with self._state_lock:
+            radio_statistics_age_s = None
+            if self._radio_statistics_received_at is not None:
+                radio_statistics_age_s = (
+                    time.monotonic() - self._radio_statistics_received_at
+                )
             result = {
                 'velocity': self._sent_velocity,
                 'external_position': self._sent_external_position,
+                'stale_velocity': self._stale_velocity_drops,
+                'skipped_frames': self._dispatch_frames_skipped,
+                'max_dispatch_delay_s': self._max_dispatch_delay_s,
+                'max_velocity_gap_s': self._max_velocity_gap_s,
                 'error': self._last_send_error,
+                'radio_uplink_rate_hz': self._radio_uplink_rate_hz,
+                'radio_uplink_payload_fraction': (
+                    self._radio_uplink_payload_fraction
+                ),
+                'radio_link_quality': self._radio_link_quality,
+                'radio_statistics_age_s': radio_statistics_age_s,
             }
             self._sent_velocity = 0
             self._sent_external_position = 0
+            self._stale_velocity_drops = 0
+            self._dispatch_frames_skipped = 0
+            self._max_dispatch_delay_s = 0.0
+            self._max_velocity_gap_s = 0.0
             self._last_send_error = None
         return result
 

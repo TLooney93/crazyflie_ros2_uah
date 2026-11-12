@@ -1,8 +1,8 @@
 """Per-vehicle ROS 2 controller for hardware and Gazebo flight."""
 
 import math
-import time
 from threading import Lock
+import time
 
 from cf_control.config import (
     ARM_SETTLE_TIME_S,
@@ -56,10 +56,7 @@ from cf_control.config import (
     VALID_WAND_GESTURES,
     VICON_ESTIMATOR_MAX_ERROR_M,
     VICON_FORWARD_RATE_HZ,
-    VICON_MAX_POSITION_JUMP_M,
-    VICON_POSITION_MEDIAN_SAMPLES,
-    VICON_REACQUIRE_SAMPLES,
-    VICON_REACQUIRE_TOLERANCE_M,
+    VICON_POSITION_FILTER_WINDOW_S,
     VICON_ZERO_POSITION_EPSILON_M,
     WAND_GESTURE_TOPIC,
     WAND_MAX_HORIZONTAL_OFFSET_M,
@@ -78,27 +75,41 @@ from cf_control.flight_state import FlightState
 from cf_control.lighthouse import LighthouseManager
 from cf_control.sample_rate import SampleRateLimiter
 from cf_control.takeoff import (
-    TakeoffSafetyLimits,
-    TakeoffSafetyMonitor,
     ground_effect_takeoff_boost,
     limit_horizontal_velocity,
     takeoff_horizontal_velocity_limit,
     takeoff_vertical_velocity_limit,
+    TakeoffSafetyLimits,
+    TakeoffSafetyMonitor,
 )
 from cf_control.telemetry import TelemetryReader
 from cf_control.vicon_filter import ViconPositionFilter
 from cf_control.wand_control import gesture_action, tilt_to_unit_offset
 
-import cflib.crtp
 from cflib.crazyflie import Crazyflie
 from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
+import cflib.crtp
 from geometry_msgs.msg import Point, PoseStamped, Twist
 from nav_msgs.msg import Odometry
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.qos import (
+    DurabilityPolicy,
+    HistoryPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+)
 from std_msgs.msg import Float32, String
 from std_srvs.srv import Trigger
+
+
+LATEST_SENSOR_QOS = QoSProfile(
+    history=HistoryPolicy.KEEP_LAST,
+    depth=1,
+    reliability=ReliabilityPolicy.BEST_EFFORT,
+    durability=DurabilityPolicy.VOLATILE,
+)
 
 
 class CrazyflieNode(Node):
@@ -242,12 +253,10 @@ class CrazyflieNode(Node):
         self.vicon_received_at = None
         self.vicon_position = None
         self.vicon_position_filter = ViconPositionFilter(
-            VICON_POSITION_MEDIAN_SAMPLES
+            VICON_POSITION_FILTER_WINDOW_S
         )
         self.vicon_consecutive_valid_samples = 0
         self.vicon_tracking_invalid = False
-        self.vicon_reacquire_position = None
-        self.vicon_reacquire_samples = 0
         self.vicon_initial_samples = 0
         self.vicon_post_reset_samples = 0
         self.vicon_estimator_reset = False
@@ -266,7 +275,7 @@ class CrazyflieNode(Node):
                 PoseStamped,
                 vicon_pose_topic,
                 self._on_vicon_pose,
-                10,
+                LATEST_SENSOR_QOS,
             )
             self.get_logger().info(
                 f'Vicon positioning selected: {vicon_pose_topic}; '
@@ -1015,25 +1024,14 @@ class CrazyflieNode(Node):
             )
             return
 
-        reacquired = False
-        if not self._vicon_jump_is_acceptable(raw_position):
-            reacquired = self._try_reacquire_vicon(raw_position)
-            if not reacquired:
-                self._reject_vicon_position(
-                    received_at,
-                    'implausible Vicon position jump',
-                )
-                return
-
-        if reacquired:
-            self.vicon_position_filter.reset(raw_position)
-        position = self.vicon_position_filter.update(raw_position)
+        position = self.vicon_position_filter.update(
+            raw_position,
+            received_at,
+        )
 
         if self.vicon_tracking_invalid:
             self.get_logger().info('Vicon position tracking recovered')
         self.vicon_tracking_invalid = False
-        self.vicon_reacquire_position = None
-        self.vicon_reacquire_samples = 0
         self.vicon_position = position
         self.vicon_received_at = received_at
         self.vicon_consecutive_valid_samples += 1
@@ -1071,39 +1069,6 @@ class CrazyflieNode(Node):
                     'Vicon positioning is ready for arming'
                 )
 
-    def _vicon_jump_is_acceptable(self, position):
-        """Return whether a new measurement is close to the last valid one."""
-        return (
-            self.vicon_position is None
-            or math.dist(position, self.vicon_position)
-            <= VICON_MAX_POSITION_JUMP_M
-        )
-
-    def _try_reacquire_vicon(self, position):
-        """Allow stable reacquisition only while the drone is disarmed."""
-        if self.flight_state is not FlightState.DISARMED:
-            self.vicon_reacquire_position = None
-            self.vicon_reacquire_samples = 0
-            return False
-
-        if (
-            self.vicon_reacquire_position is None
-            or math.dist(position, self.vicon_reacquire_position)
-            > VICON_REACQUIRE_TOLERANCE_M
-        ):
-            self.vicon_reacquire_position = position
-            self.vicon_reacquire_samples = 1
-            return False
-
-        self.vicon_reacquire_samples += 1
-        if self.vicon_reacquire_samples < VICON_REACQUIRE_SAMPLES:
-            return False
-
-        self.get_logger().warning(
-            'Accepting stable Vicon position after disarmed reacquisition'
-        )
-        return True
-
     def _reject_vicon_position(self, received_at, reason):
         """Reject an invalid measurement without refreshing position age."""
         self.vicon_consecutive_valid_samples = 0
@@ -1127,8 +1092,32 @@ class CrazyflieNode(Node):
                 f'; cflib handoff velocity '
                 f'{statistics["velocity"] / elapsed:.1f} Hz, '
                 f'extpos '
-                f'{statistics["external_position"] / elapsed:.1f} Hz'
+                f'{statistics["external_position"] / elapsed:.1f} Hz, '
+                f'max command gap '
+                f'{statistics["max_velocity_gap_s"] * 1000.0:.0f} ms'
             )
+            radio_rate_hz = statistics['radio_uplink_rate_hz']
+            radio_payload = statistics['radio_uplink_payload_fraction']
+            radio_quality = statistics['radio_link_quality']
+            radio_age_s = statistics['radio_statistics_age_s']
+            if radio_rate_hz is not None:
+                radio_text += f'; measured radio uplink {radio_rate_hz:.0f} Hz'
+            if radio_payload is not None:
+                radio_text += f', payload {radio_payload * 100.0:.0f}%'
+            if radio_quality is not None:
+                radio_text += f', quality {radio_quality:.0f}%'
+            if radio_age_s is not None and radio_age_s > 1.0:
+                radio_text += f' (statistics {radio_age_s:.1f} s old)'
+            if statistics['stale_velocity']:
+                radio_text += (
+                    f'; stale commands {statistics["stale_velocity"]}'
+                )
+            if statistics['skipped_frames']:
+                radio_text += (
+                    f'; skipped frames {statistics["skipped_frames"]}, '
+                    f'max dispatch delay '
+                    f'{statistics["max_dispatch_delay_s"] * 1000.0:.0f} ms'
+                )
             if statistics['error']:
                 radio_text += f'; send error {statistics["error"]}'
         with self.position_lock:

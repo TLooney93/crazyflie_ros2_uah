@@ -4,11 +4,11 @@ import argparse
 
 from cf_control.config import CACHE_DIR, DRONES, PREFLIGHT_MIN_BATTERY_VOLTAGE
 
-import cflib.crtp
 from cflib.crazyflie import Crazyflie
 from cflib.crazyflie.log import LogConfig
 from cflib.crazyflie.syncCrazyflie import SyncCrazyflie
 from cflib.crazyflie.syncLogger import SyncLogger
+import cflib.crtp
 
 
 BLOCKING_SUPERVISOR_STATES = {'Is crashed', 'Is locked', 'Is tumbled'}

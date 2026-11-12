@@ -18,11 +18,11 @@ class CrazyflieInterfaceTest(unittest.TestCase):
         self.interface = CrazyflieInterface(self.scf)
 
     def test_shared_dispatcher_accepts_stable_three_drone_rate(self):
-        dispatcher = RadioCommandDispatcher(rate_hz=30.0)
+        dispatcher = RadioCommandDispatcher(rate_hz=50.0)
 
-        self.assertEqual(dispatcher.rate_hz, 30.0)
-        with self.assertRaisesRegex(ValueError, 'at least 25 Hz'):
-            RadioCommandDispatcher(rate_hz=24.9)
+        self.assertEqual(dispatcher.rate_hz, 50.0)
+        with self.assertRaisesRegex(ValueError, 'at least 50 Hz'):
+            RadioCommandDispatcher(rate_hz=49.9)
 
     def test_arm_and_disarm_use_supervisor(self):
         self.scf.cf.supervisor.read_state_list.return_value = [
@@ -71,6 +71,25 @@ class CrazyflieInterfaceTest(unittest.TestCase):
             -0.2,
             0.3,
         )
+
+    def test_reports_measured_radio_statistics(self):
+        self.interface.start()
+        try:
+            self.interface._update_radio_uplink_rate(312.5)
+            self.interface._update_radio_uplink_payload_fraction(0.67)
+            self.interface._update_radio_link_quality(94.0)
+
+            statistics = self.interface.consume_send_statistics()
+
+            self.assertEqual(statistics['radio_uplink_rate_hz'], 312.5)
+            self.assertEqual(
+                statistics['radio_uplink_payload_fraction'],
+                0.67,
+            )
+            self.assertEqual(statistics['radio_link_quality'], 94.0)
+            self.assertLess(statistics['radio_statistics_age_s'], 0.1)
+        finally:
+            self.interface.shutdown()
 
     def test_stop_and_disarm_sends_all_safety_commands(self):
         parent = Mock()
